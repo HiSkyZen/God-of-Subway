@@ -1,7 +1,7 @@
 import { DATASET_METADATA } from "./data-metadata";
 import { apiKeyConfigured, fetchPosition, healthRealtimeSnapshot, prefetchPositionCache, cachedPositionRows, type FetchLike } from "./realtime-service";
 import { calculateLiveTrip as calculateLiveTripImpl, calculateRoute as calculateRouteImpl } from "./eta-service";
-import { calculateGtxHybridAuto, calculateGtxHybridRoute, calculateGtxHybridTrip, GTX_LINES } from "./gtx-service";
+import { calculateGtxHybridAuto, calculateGtxHybridRoute, calculateGtxHybridTrip, GTX_LINES, isGtxLine } from "./gtx-service";
 import { nowKst, resolveServiceMode, holidayInfo, stationOptions, formatKst } from "./timetable-service";
 import { cacheSnapshot } from "../infra/cache";
 import { debugEnabled } from "../infra/observability";
@@ -12,6 +12,7 @@ export { nowKst, formatKst, fetchPosition, prefetchPositionCache, cachedPosition
 
 export async function calculateRoute(payload: Record<string, unknown>, positionCache?: PositionCache, fetchImpl: FetchLike = fetch): Promise<Serialized> {
   const typed = payload as unknown as CalculateRoutePayload;
+  if (!typed.segments.some((segment) => isGtxLine(String(segment.line)))) return calculateRouteImpl(typed, positionCache, fetchImpl);
   return calculateGtxHybridRoute(typed, (next) => calculateRouteImpl(next, positionCache, fetchImpl), fetchImpl);
 }
 
@@ -22,6 +23,7 @@ export async function calculateAutoRoute(payload: Record<string, unknown>, fetch
 
 export async function calculateLiveTrip(payload: Record<string, unknown>, fetchImpl: FetchLike = fetch): Promise<Serialized> {
   const typed = payload as unknown as LiveTripPayload;
+  if (!typed.segments.some((segment) => isGtxLine(String(segment.line)))) return calculateLiveTripImpl(typed, fetchImpl);
   return calculateGtxHybridTrip(
     typed,
     (next) => calculateLiveTripImpl(next, fetchImpl),
