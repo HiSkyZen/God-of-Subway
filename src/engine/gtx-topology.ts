@@ -2,8 +2,8 @@ import type { PositionRow } from "../types/domain";
 import { canonStation } from "./timetable-service";
 
 export const GTX_LINES = {
-  "GTX-A(북부)": { stations: ["운정중앙", "킨텍스", "대곡", "연신내", "서울역"], segmentSeconds: [300, 300, 540, 360] },
-  "GTX-A(남부)": { stations: ["수서", "성남", "구성", "동탄"], segmentSeconds: [420, 360, 420] },
+  "GTX-A(북부)": { stations: ["운정중앙", "킨텍스", "대곡", "연신내", "서울역"], segmentSeconds: [240, 300, 420, 360] },
+  "GTX-A(남부)": { stations: ["수서", "성남", "구성", "동탄"], segmentSeconds: [420, 420, 420] },
 } as const;
 
 export type GtxLine = keyof typeof GTX_LINES;
@@ -48,8 +48,8 @@ export function gtxDirection(line: GtxLine, row: PositionRow): 1 | -1 | null {
   const targetIndex = stations.indexOf(target as never);
   if (targetIndex === stations.length - 1) return 1;
   if (targetIndex === 0) return -1;
-  const updn = String(row.updnLine || "");
-  if (/하행/.test(updn)) return 1;
-  if (/상행/.test(updn)) return -1;
+  const updn = String(row.updnLine ?? "").trim();
+  if (updn === "1" || /하행|외선/.test(updn)) return 1;
+  if (updn === "0" || /상행|내선/.test(updn)) return -1;
   return null;
 }
