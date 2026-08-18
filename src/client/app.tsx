@@ -44,7 +44,7 @@ function App(): ReactElement {
   useEffect(() => {
     document.documentElement.dataset.theme = theme;
     localStorage.setItem("jigeumta_theme", theme);
-    document.querySelector('meta[name="theme-color"]')?.setAttribute("content", theme === "dark" ? "#101719" : "#f4f7f6");
+    document.querySelector('meta[name="theme-color"]')?.setAttribute("content", theme === "dark" ? "#0b1118" : "#ffffff");
   }, [theme]);
   useEffect(() => {
     search.setExperimentEnabled(experimentOptIn);
