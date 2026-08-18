@@ -22,12 +22,13 @@
       ]
     },
     { "source": "/logo", "headers": [{ "key": "Content-Type", "value": "image/png" }] },
-    { "source": "/sw.js", "headers": [{ "key": "Service-Worker-Allowed", "value": "/" }, { "key": "Cache-Control", "value": "no-cache" }] }
+    { "source": "/manifest.webmanifest", "headers": [{ "key": "Content-Type", "value": "application/manifest+json; charset=utf-8" }, { "key": "Cache-Control", "value": "public, max-age=3600" }] },
+    { "source": "/sw.js", "headers": [{ "key": "Content-Type", "value": "application/javascript; charset=utf-8" }, { "key": "Service-Worker-Allowed", "value": "/" }, { "key": "Cache-Control", "value": "no-cache, no-store, must-revalidate" }] }
   ],
   "functions": {
     "api/index.ts": {
       "maxDuration": 60,
-      "includeFiles": "{schedule_weekday.json,schedule_holiday.json,stations.json,official_2to9_schedule.json,korail_extra_lines_schedule.json,kr_holidays_2026_2035.json,route_graph.json,transfer_data.json}"
+      "includeFiles": "{schedule_weekday.json,schedule_holiday.json,stations.json,official_2to9_schedule.json,korail_extra_lines_schedule.json,sinbundang_schedule.json,kr_holidays_2026_2035.json,route_graph.json,transfer_data.json}"
     }
   }
 }
