@@ -28,5 +28,10 @@ test("Vercel publishes only public assets and traces every engine data file into
   expect(config.functions?.["api/index.ts"]?.includeFiles).toBe(
     "{schedule_weekday.json,schedule_holiday.json,stations.json,official_2to9_schedule.json,korail_extra_lines_schedule.json,kr_holidays_2026_2035.json,route_graph.json,transfer_data.json}",
   );
-  expect(await Bun.file("api/index.ts").text()).not.toContain("../src/server");
+
+  // Vercel zero-config backends auto-detect src/server.ts. Keep the local/AOT
+  // Bun HTML-import server under a non-reserved filename, and keep the explicit
+  // /api function independent from that full-stack server entrypoint.
+  expect(await Bun.file("src/bun-server.ts").exists()).toBeTrue();
+  expect(await Bun.file("api/index.ts").text()).not.toContain("../src/bun-server");
 });

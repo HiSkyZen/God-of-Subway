@@ -1,7 +1,7 @@
 Bun.env.PORT = "0";
 // The generated AOT bundle intentionally has no checked-in declaration file.
 // @ts-expect-error generated dist module is validated by this script at runtime
-const module = await import("../dist/server/server.js");
+const module = await import("../dist/server/bun-server.js");
 const server = module.startServer();
 try {
   const checks: Array<[string, number, string?]> = [

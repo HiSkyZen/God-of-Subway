@@ -7,9 +7,9 @@
     "bun": ">=1.3.14"
   },
   "scripts": {
-    "dev": "bun run src/server.ts",
-    "start": "bun run dist/server/server.js",
-    "build": "bun run scripts/clean-dist.ts && bun build --target=bun --production --outdir=dist/server ./src/server.ts",
+    "dev": "bun run src/bun-server.ts",
+    "start": "bun run dist/server/bun-server.js",
+    "build": "bun run scripts/clean-dist.ts && bun build --target=bun --production --outdir=dist/server ./src/bun-server.ts",
     "build:client": "bun build --target=browser --production ./src/client/sw.ts --outfile=dist/public/sw.js && bun run scripts/copy-pwa-assets.ts",
     "build:all": "bun run build && bun run build:client && bun run scripts/promote-static.ts",
     "verify:pwa": "bun run scripts/verify-pwa-assets.ts",

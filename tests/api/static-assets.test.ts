@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test";
-import { fetchHandler } from "../../src/server";
+import { fetchHandler } from "../../src/bun-server";
 
 const get = (path: string) => fetchHandler(new Request(`http://localhost${path}`));
 
