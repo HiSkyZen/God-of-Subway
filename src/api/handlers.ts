@@ -32,14 +32,18 @@ const callEngine = async (fn: (payload: EnginePayload) => unknown | Promise<unkn
   const rid = requestId(request); const started = performance.now(); let payload: EnginePayload;
   try { payload = await readJsonPayload(request); }
   catch (error) { logEvent("warn", "api_invalid_body", { request_id: rid, operation, error: error instanceof Error ? error.message : String(error) }); return invalidRequestResponse(error instanceof RequestBodyError ? error.message : "Invalid request", { request_id: rid }); }
+  const debugQuery = payload.debug_mode === true;
   try {
-    logEvent("debug", "api_request", { request_id: rid, operation, payload });
-    const result = await fn(payload); const response = isEngineResult(result) ? result : { ok: true, result };
-    logEvent("info", "api_response", { request_id: rid, operation, ok: response.ok !== false, duration_ms: Math.round(performance.now() - started) });
-    return jsonResponse({ ...response, request_id: rid }, response.ok === false ? 422 : 200, { "x-request-id": rid });
+    logEvent(debugQuery ? "info" : "debug", debugQuery ? "debug_query" : "api_request", { request_id: rid, operation, payload });
+    const result = await fn(payload); const response = isEngineResult(result) ? result : { ok: true, result }; const duration = Math.round(performance.now() - started);
+    logEvent("info", "api_response", { request_id: rid, operation, ok: response.ok !== false, duration_ms: duration, debug_query: debugQuery });
+    return jsonResponse({ ...response, request_id: rid, ...(debugQuery ? { debug: { request_id: rid, operation, duration_ms: duration } } : {}) }, response.ok === false ? 422 : 200, { "x-request-id": rid });
   } catch (error) {
-    if (error instanceof Error && /(구간|역|열차번호|탑승|올바르지|입력하세요|필수)/.test(error.message)) { logEvent("warn", "engine_validation_error", { request_id: rid, operation, error: error.message }); return invalidRequestResponse("요청 값이 올바르지 않습니다."); }
-    const publicInfo = publicError(error); logEvent("error", "engine_exception", { request_id: rid, error_id: publicInfo.error_id, operation, error: error instanceof Error ? { name: error.name, message: error.message, stack: error.stack } : String(error), duration_ms: Math.round(performance.now() - started) });
+    if (error instanceof Error && /(구간|역|열차번호|탑승|올바르지|입력하세요|필수)/.test(error.message)) {
+      logEvent("warn", "engine_validation_error", { request_id: rid, operation, error: error.message, debug_query: debugQuery });
+      return debugQuery ? invalidRequestResponse(error.message, { request_id: rid }) : invalidRequestResponse("요청 값이 올바르지 않습니다.");
+    }
+    const publicInfo = publicError(error); logEvent("error", "engine_exception", { request_id: rid, error_id: publicInfo.error_id, operation, error: error instanceof Error ? { name: error.name, message: error.message, stack: error.stack } : String(error), duration_ms: Math.round(performance.now() - started), debug_query: debugQuery });
     return internalErrorResponse({ request_id: rid, error_id: publicInfo.error_id, ...(publicInfo.detail ? { detail: publicInfo.detail } : {}) });
   }
 };
