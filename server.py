@@ -11,13 +11,24 @@ import engine
 import observability
 
 BASE = Path(__file__).resolve().parent
-VERSION = "V13.4.3.0-vercel"
+VERSION = "V13.4.8.0-vercel"
 
 app = FastAPI(
     title="지금타",
     docs_url=None,
     redoc_url=None,
 )
+
+TIMETABLE_INTEGRITY = engine.timetable_integrity_report()
+if not TIMETABLE_INTEGRITY.get("ok"):
+    observability.record_event(
+        event_type="timetable_integrity_error",
+        level="error",
+        endpoint="startup",
+        error_type="TimetableIntegrityError",
+        message=f"시간표 무결성 오류 {TIMETABLE_INTEGRITY.get('issue_count', 0)}건",
+        diagnostics=TIMETABLE_INTEGRITY,
+    )
 
 
 def _request_id(request: Request) -> str:
@@ -34,6 +45,44 @@ def _request_context(request: Request) -> dict:
 def _response(data: dict, status_code: int, request_id: str) -> JSONResponse:
     return JSONResponse(data, status_code=status_code, headers={"X-Request-ID": request_id})
 
+
+
+def _record_realtime_match_issues(*, endpoint: str, request_id: str, payload, result, context):
+    """실시간 행은 왔는데 시간표에 하나도 붙지 않은 경우를 항상 구조화 로그로 남긴다."""
+    segments = result.get("segments") if isinstance(result, dict) else None
+    if not isinstance(segments, list):
+        return
+    for index, segment in enumerate(segments):
+        if not isinstance(segment, dict):
+            continue
+        diag = segment.get("diagnostics")
+        if not isinstance(diag, dict):
+            continue
+        positions = int(diag.get("positions") or 0)
+        matched = int(diag.get("matched") or 0)
+        matched_context = int(diag.get("matched_context") or 0)
+        if positions <= 0 or matched + matched_context > 0:
+            continue
+        observability.record_event(
+            event_type="realtime_train_match_failure",
+            level="warning",
+            endpoint=endpoint,
+            request_id=request_id,
+            status_code=200,
+            message=f"{segment.get('line', '')} 실시간 {positions}건 수신 후 시간표 매칭 0건",
+            payload=payload,
+            diagnostics={
+                "segment_index": index,
+                "line": segment.get("line", ""),
+                "from": segment.get("from", ""),
+                "to": segment.get("to", ""),
+                "realtime_query": diag.get("realtime_query", ""),
+                "positions": positions,
+                "unmatched_train": diag.get("unmatched_train", [])[:10],
+                "unmatched_station": diag.get("unmatched_station", [])[:10],
+            },
+            context=context,
+        )
 
 async def _run_engine_endpoint(request: Request, endpoint: str, fn):
     request_id = _request_id(request)
@@ -59,6 +108,14 @@ async def _run_engine_endpoint(request: Request, endpoint: str, fn):
 
         await run_in_threadpool(
             observability.record_low_confidence,
+            endpoint=endpoint,
+            request_id=request_id,
+            payload=payload,
+            result=result,
+            context=context,
+        )
+        await run_in_threadpool(
+            _record_realtime_match_issues,
             endpoint=endpoint,
             request_id=request_id,
             payload=payload,
@@ -128,6 +185,12 @@ def health():
         "gyeongui_holiday_trains": len(engine.EXTRA["경의중앙선"]["trains"]["holiday"]),
         "suin_weekday_trains": len(engine.EXTRA["수인분당선"]["trains"]["weekday"]),
         "suin_holiday_trains": len(engine.EXTRA["수인분당선"]["trains"]["holiday"]),
+        "sinbundang_weekday_trains": len(engine.SINBUNDANG["trains"]["weekday"]),
+        "sinbundang_weekend_trains": len(engine.SINBUNDANG["trains"]["holiday"]),
+        "sinbundang_source_sha256": engine.SINBUNDANG.get("meta", {}).get("source_sha256", ""),
+        "schedule_only_lines": sorted(engine.SCHEDULE_ONLY_LINES),
+        "realtime_line_ids": dict(engine.LINE_IDS),
+        "realtime_query_aliases": {k: list(v) for k, v in engine.REALTIME_QUERY_ALIASES.items()},
         "extra_lines": {
             line: {
                 "weekday_trains": len(engine.EXTRA[line]["trains"]["weekday"]),
@@ -137,6 +200,8 @@ def health():
         },
         "api_key_configured": bool(engine.API_KEY),
         "persistent_error_log_configured": bool(os.environ.get("DATABASE_URL", "").strip()),
+        "timetable_integrity": TIMETABLE_INTEGRITY,
+        "route_graph_version": engine.ROUTE_GRAPH.get("meta", {}).get("version"),
     }
 
 
