@@ -61,6 +61,7 @@ scope.addEventListener("fetch", (event: FetchLike) => {
       if (response.ok && response.type === "basic") await caches.open(CACHE_NAME).then((cache) => cache.put("/", response.clone()));
       return response;
     }).catch(() => caches.match("/").then((fallback) => fallback || OFFLINE_RESOURCE_RESPONSE()));
+    event.waitUntil(navigationResponse.then(() => undefined));
     event.respondWith(navigationResponse);
     return;
   }
@@ -71,6 +72,7 @@ scope.addEventListener("fetch", (event: FetchLike) => {
       return response;
     }).catch(() => OFFLINE_RESOURCE_RESPONSE());
   });
+  event.waitUntil(runtimeResponse.then(() => undefined));
   event.respondWith(runtimeResponse);
 });
 
