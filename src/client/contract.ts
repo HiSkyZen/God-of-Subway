@@ -54,6 +54,7 @@ export interface AutoRouteRequest {
   start_time: string;
   baseline_minutes?: string | number | null;
   day: ServiceMode;
+  exclude_gtx?: boolean;
 }
 
 export interface TripUpdateRequest {
