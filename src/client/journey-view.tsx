@@ -20,7 +20,8 @@ function seconds(value: unknown): number {
 }
 function transferSeconds(segment: RouteSegment): number {
   const info = segment.transfer_info || {};
-  return seconds(segment.transfer_seconds) || seconds(info.seconds) || seconds(info.walking_seconds) || Math.round(seconds(segment.transfer_walk) * 60);
+  const walkingMinutes = Number(segment.transfer_walk);
+  return seconds(segment.transfer_seconds) || seconds(info.seconds) || seconds(info.walking_seconds) || (Number.isFinite(walkingMinutes) && walkingMinutes > 0 ? Math.round(walkingMinutes * 60) : 0);
 }
 function transferText(segment: RouteSegment): string {
   const value = transferSeconds(segment);
