@@ -1,7 +1,5 @@
-const CACHE_NAME = "jigeumta-shell-v17";
+const CACHE_NAME = "jigeumta-shell-v18";
 const CACHE_PREFIX = "jigeumta-";
-// Only stable, server-addressable URLs are precached. Bun's HTML build hashes JS/CSS;
-// those files enter the cache through the runtime strategy after index.html loads.
 const REQUIRED_SHELL = ["/"];
 const OPTIONAL_SHELL = ["/manifest.webmanifest", "/jigeumta_logo_140.png", "/icons/icon-192.png", "/icons/icon-512.png", "/icons/icon-maskable-512.png"];
 const OFFLINE_RESOURCE_RESPONSE = (): Response => new Response("오프라인 상태로 이 리소스를 불러올 수 없습니다.", { status: 503, headers: { "Content-Type": "text/plain; charset=utf-8" } });
@@ -24,11 +22,29 @@ interface ServiceWorkerScopeLike {
 }
 const scope = self as unknown as ServiceWorkerScopeLike;
 
+async function installShell(): Promise<void> {
+  const cache = await caches.open(CACHE_NAME);
+  const response = await fetch("/", { cache: "no-store" });
+  if (!response.ok) throw new Error(`PWA shell request failed: ${response.status}`);
+  const html = await response.clone().text();
+  await cache.put("/", response);
+  const discovered = new Set<string>();
+  for (const match of html.matchAll(/(?:src|href)=["']([^"']+)["']/g)) {
+    try {
+      const url = new URL(match[1], scope.location.origin);
+      if (url.origin === scope.location.origin && /\.(?:js|css)(?:$|\?)/.test(url.pathname + url.search)) discovered.add(url.pathname + url.search);
+    } catch { /* ignore malformed markup */ }
+  }
+  await Promise.all([...OPTIONAL_SHELL, ...discovered].map(async (url) => {
+    try {
+      const asset = await fetch(url, { cache: "no-store" });
+      if (asset.ok) await cache.put(url, asset);
+    } catch { /* keep installation usable when an optional asset is transiently unavailable */ }
+  }));
+}
+
 scope.addEventListener("install", (event: ExtendableLike) => {
-  event.waitUntil(caches.open(CACHE_NAME).then(async (cache) => {
-    await cache.addAll(REQUIRED_SHELL);
-    await Promise.all(OPTIONAL_SHELL.map(async (url) => { try { await cache.add(url); } catch { /* optional asset may be unavailable in dev */ } }));
-  }).then(() => scope.skipWaiting()));
+  event.waitUntil(installShell().then(() => scope.skipWaiting()));
 });
 
 scope.addEventListener("activate", (event: ExtendableLike) => {
@@ -45,7 +61,6 @@ scope.addEventListener("fetch", (event: FetchLike) => {
       if (response.ok && response.type === "basic") await caches.open(CACHE_NAME).then((cache) => cache.put("/", response.clone()));
       return response;
     }).catch(() => caches.match("/").then((fallback) => fallback || OFFLINE_RESOURCE_RESPONSE()));
-    event.waitUntil(navigationResponse.then(() => undefined));
     event.respondWith(navigationResponse);
     return;
   }
@@ -56,7 +71,6 @@ scope.addEventListener("fetch", (event: FetchLike) => {
       return response;
     }).catch(() => OFFLINE_RESOURCE_RESPONSE());
   });
-  event.waitUntil(runtimeResponse.then(() => undefined));
   event.respondWith(runtimeResponse);
 });
 
