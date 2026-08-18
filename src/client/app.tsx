@@ -22,6 +22,7 @@ function initialTheme(): Theme {
 function timeText(date: Date): string {
   return date.toLocaleTimeString("ko-KR", { hour: "numeric", minute: "2-digit", hour12: true }).replace(/\s/g, "");
 }
+function timeValue(date: Date): string { return `${String(date.getHours()).padStart(2, "0")}:${String(date.getMinutes()).padStart(2, "0")}`; }
 function shiftClock(value: string, delta: number): string {
   const match = value.match(/^(\d{2}):(\d{2})$/);
   if (!match) return value;
@@ -38,6 +39,7 @@ function App(): ReactElement {
   const inputRef = useRef<HTMLInputElement>(null);
   const [theme, setTheme] = useState<Theme>(initialTheme);
   const [experimentOptIn, setExperimentOptIn] = useState(() => localStorage.getItem("jigeumta_experiment_enabled") === "1");
+  const [debugQuery, setDebugQuery] = useState(() => localStorage.getItem("jigeumta_debug_query") === "1");
 
   useEffect(() => {
     document.documentElement.dataset.theme = theme;
@@ -48,6 +50,7 @@ function App(): ReactElement {
     search.setExperimentEnabled(experimentOptIn);
     localStorage.setItem("jigeumta_experiment_enabled", experimentOptIn ? "1" : "0");
   }, [experimentOptIn]);
+  useEffect(() => { localStorage.setItem("jigeumta_debug_query", debugQuery ? "1" : "0"); }, [debugQuery]);
   useEffect(() => { if (!live.liveTrip || search.result || !live.restoredResult) return; search.restoreTrip(live.liveTrip, live.restoredResult); }, [live.liveTrip?.journeyStartedAt, Boolean(search.result)]);
 
   const activeSegments = live.liveTrip?.displaySegments || live.liveResult?.segments || search.result?.segments || [];
@@ -66,12 +69,22 @@ function App(): ReactElement {
   const refreshJourney = async (): Promise<void> => { try { if (await live.refreshLiveJourney()) return; await search.refreshRoute(); } catch (caught: unknown) { notify(caught instanceof Error ? `갱신 실패: ${caught.message}` : "갱신에 실패했습니다."); } };
   const closeSuggestions = (side: "from" | "to"): void => { window.setTimeout(() => { const focused = document.activeElement; if (focused instanceof HTMLInputElement && focused.getAttribute("aria-controls")?.endsWith("-station-suggestions")) return; search.setActiveSuggestion((current) => current === side ? null : current); }, 140); };
   const shiftSearchTime = (minutes: number): void => { if (search.exactTime) search.setExactTime(shiftClock(search.exactTime, minutes)); else search.adjustTime(search.searchMinutes + minutes); };
+  const shareRoute = async (): Promise<void> => {
+    const text = `${search.from} → ${search.to}`;
+    try {
+      if (navigator.share) { await navigator.share({ title: "지금타 경로", text }); return; }
+      await navigator.clipboard?.writeText(text); notify("경로를 복사했습니다.");
+    } catch (caught: unknown) {
+      if (caught instanceof DOMException && caught.name === "AbortError") return;
+      try { await navigator.clipboard?.writeText(text); notify("경로를 복사했습니다."); } catch { notify("경로 공유에 실패했습니다."); }
+    }
+  };
 
   return <div className="app-shell">
     <header className="app-header">
       <a className="brand" href="./" aria-label="지금타 홈"><img src="./jigeumta_logo_140.png" alt="" /><span>지금<span>타</span></span></a>
       <nav className="header-actions" aria-label="주요 작업">
-        <span className={`service-status ${search.healthState}`}><i /> {search.healthState === "ok" ? "서비스 정상" : search.healthState === "error" ? "연결 확인 필요" : "연결 확인 중"}</span>
+        <span className={`service-status ${search.healthState}`}><i /> {search.healthState === "ok" ? "서버 연결됨" : search.healthState === "error" ? "서버 연결 실패" : "서버 확인 중"}</span>
         <button className="header-button theme-toggle" type="button" onClick={() => setTheme((value) => value === "dark" ? "light" : "dark")} aria-label={theme === "dark" ? "라이트 모드로 전환" : "다크 모드로 전환"}>{theme === "dark" ? "☀ 라이트" : "◐ 다크"}</button>
         <button className="header-button" type="button" onClick={() => push.setPushSheet(true)}><BellIcon /> 알림</button>
         {(push.installEvent || push.showInstallSheet) && <button className="header-button" type="button" onClick={() => push.installEvent ? void push.install() : push.setShowInstallSheet(true)}>앱 설치</button>}
@@ -90,7 +103,7 @@ function App(): ReactElement {
         <div className="time-strip" aria-label="조회 시각 조정">
           <button type="button" onClick={() => search.adjustTime(0)}>지금</button>
           <span className="time-step-group"><button type="button" onClick={() => shiftSearchTime(-5)}>−5분</button><button type="button" onClick={() => shiftSearchTime(-1)}>−1분</button></span>
-          <button type="button" className="selected-time" onClick={search.toggleSettings} aria-label="정확한 조회 시각 설정">{timeText(selectedDate)}</button>
+          <label className="selected-time time-picker" aria-label="조회 시각 직접 선택"><span>{timeText(selectedDate)}</span><input type="time" value={timeValue(selectedDate)} onChange={(event) => search.setExactTime(event.target.value)} /></label>
           <span className="time-step-group"><button type="button" onClick={() => shiftSearchTime(1)}>+1분</button><button type="button" onClick={() => shiftSearchTime(5)}>+5분</button></span>
         </div>
       </section>
@@ -102,10 +115,9 @@ function App(): ReactElement {
 
       {search.showSettings && <section className="settings-panel" aria-label="상세 설정">
         <label>운행일<select value={search.day} onChange={(event) => search.setDay(parseServiceModeSelection(event.target.value))}><option value="AUTO">자동</option><option value="DAY">평일</option><option value="SAT">토요일</option><option value="END">일요일·공휴일</option></select></label>
-        <label>정확한 조회 시각<input type="time" value={search.exactTime} onChange={(event) => search.setExactTime(event.target.value)} /></label>
         <label>기존 앱 예상 총시간 · 실험용<input type="number" min={1} value={search.baseline} onChange={(event) => search.setBaseline(event.target.value)} placeholder="예: 62" /></label>
         <label className="checkbox-label"><input type="checkbox" checked={experimentOptIn} onChange={(event) => setExperimentOptIn(event.target.checked)} /> 기말 시험 기록 활성화</label>
-        <details className="diagnostic-details"><summary>로그 / 진단</summary><p>서버 요청과 예외는 <code>JIGEUMTA_LOG</code> 구조화 로그로 기록됩니다. 오류가 발생하면 화면의 오류 ID로 Vercel Function Logs와 대조할 수 있습니다.</p><p>상세 디버그는 배포 환경에서 <code>JIGEUMTA_DEBUG=1</code> 또는 <code>DEBUG_DIAGNOSTICS=1</code>일 때만 추가됩니다.</p></details>
+        <label className="checkbox-label"><input type="checkbox" checked={debugQuery} onChange={(event) => setDebugQuery(event.target.checked)} /> 디버그모드 조회</label>
       </section>}
 
       {search.error && <p className="error-banner" role="alert"><strong>조회 실패</strong><span>{search.error}</span></p>}
@@ -114,7 +126,7 @@ function App(): ReactElement {
 
       {live.liveTrip && <LivePanel trip={live.liveTrip} result={live.liveResult} alertActive={Boolean(push.pushAlert && !push.pushAlert.pending_cancel)} arrivalAlertCapable={push.arrivalAlertCapable} onAlert={() => void push.registerArrivalAlert(live.liveTrip)} onClearAlert={() => void push.clearArrivalAlert()} onFinishTransfer={() => void live.finishTransfer()} onAlight={live.handleAlight} onStop={live.stopTracking} />}
 
-      {search.result && <div className="bottom-actions"><button type="button" className="favorite-save" onClick={search.saveFavorite}>☆ 이 경로 즐겨찾기</button><button type="button" onClick={() => { void navigator.clipboard?.writeText(`${search.from} → ${search.to}`); notify("경로를 복사했습니다."); }}><ShareIcon /> 경로 공유</button><span className="tool-spacer" /><button type="button" onClick={() => void refreshJourney()}>현재 정보로 다시 계산</button></div>}
+      {search.result && <div className="bottom-actions"><button type="button" className="favorite-save" onClick={search.saveFavorite}>☆ 이 경로 즐겨찾기</button><button type="button" className="share-route" onClick={() => void shareRoute()}><ShareIcon /> <span>경로 공유</span></button><span className="tool-spacer" /><button type="button" className="refresh-route" onClick={() => void refreshJourney()}>현재 정보로 다시 계산</button></div>}
 
       {experimentOptIn && <ExperimentPanel experiments={search.experiments} onArrive={search.arriveExperiment} onUpdate={search.updateExperiment} onDelete={search.deleteExperiment} onCsv={() => search.exportExperiments("csv")} onJson={() => search.exportExperiments("json")} />}
     </main>
