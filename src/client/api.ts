@@ -19,6 +19,15 @@ export interface ApiClientOptions {
 
 export type FetchImplementation = (input: RequestInfo | URL, init?: RequestInit) => Promise<Response>;
 
+function publicErrorMessage(payload: ApiEnvelope, fallback: string): string {
+  const base = payload.error || fallback;
+  const errorId = typeof payload.error_id === "string" ? payload.error_id : "";
+  const requestId = typeof payload.request_id === "string" ? payload.request_id : "";
+  if (errorId) return `${base} · 오류 ID ${errorId}`;
+  if (requestId) return `${base} · 요청 ID ${requestId}`;
+  return base;
+}
+
 export class ApiClient {
   private readonly fetchImpl: FetchImplementation;
   private readonly defaultTimeoutMs: number;
@@ -50,7 +59,7 @@ export class ApiClient {
       let payload: ApiEnvelope;
       try { payload = JSON.parse(text) as ApiEnvelope; }
       catch { throw new ApiError(`서버 응답 오류 (${response.status})`, response.status); }
-      if (!response.ok || payload.ok !== true) throw new ApiError(payload.error || "요청 실패", response.status, payload);
+      if (!response.ok || payload.ok !== true) throw new ApiError(publicErrorMessage(payload, "요청 실패"), response.status, payload);
       return payload as T;
     } catch (error: unknown) {
       if (error instanceof DOMException && error.name === "AbortError") throw new ApiError("조회가 20초를 초과했습니다. 잠시 후 다시 시도해 주세요.");
