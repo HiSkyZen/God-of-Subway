@@ -1,6 +1,7 @@
 import type { AutoRoutePayload, CalculateRoutePayload, LiveTripPayload, PositionRow, SegmentInput, Serialized } from "../types/domain";
 import { fetchPosition, positionRows, type FetchLike } from "./realtime-service";
 import { autoCandidateRoutes, candidateInterchanges, routeConfidence } from "./routing-service";
+import { scheduledGtxCandidates } from "./gtx-schedule";
 import { GTX_LINES, GTX_LINE_NAMES, gtxDirection, gtxDuration, gtxLineForPair, gtxLineForStation, gtxSecondsBetween, isGtxLine, type GtxLine } from "./gtx-topology";
 import { canonStation, formatKst, nowKst, parseDt, resolveServiceMode } from "./timetable-service";
 
@@ -16,10 +17,11 @@ type BaseTrip = (payload: LiveTripPayload) => Promise<Serialized>;
 interface GtxCandidate {
   board: Date;
   alight: Date;
-  row: PositionRow;
   current: string;
   trainNo: string;
   wanted: 1 | -1;
+  live: boolean;
+  row?: PositionRow;
 }
 
 function asSegments(result: Serialized): Array<Record<string, unknown>> {
@@ -45,7 +47,7 @@ function candidateLine(line: GtxLine, from: string, to: string): { fromName: str
   return { fromName, toName, fi, ti, wanted: fi < ti ? 1 : -1 };
 }
 
-function publicGtxCandidate(line: GtxLine, candidate: GtxCandidate, from: string, to: string, selected = false): Record<string, unknown> {
+function publicGtxCandidate(line: GtxLine, candidate: GtxCandidate, from: string, to: string, ready: Date, selected = false): Record<string, unknown> {
   const cfg = GTX_LINES[line];
   return {
     line,
@@ -58,25 +60,24 @@ function publicGtxCandidate(line: GtxLine, candidate: GtxCandidate, from: string
     direction: candidate.wanted === 1 ? "DOWN" : "UP",
     board_dt: formatKst(candidate.board),
     alight_dt: formatKst(candidate.alight),
-    wait_seconds: Math.max(0, Math.round((candidate.board.getTime() - nowKst().getTime()) / 1000)),
+    wait_seconds: Math.max(0, Math.round((candidate.board.getTime() - ready.getTime()) / 1000)),
     ride_seconds: Math.max(0, Math.round((candidate.alight.getTime() - candidate.board.getTime()) / 1000)),
     delay_seconds: 0,
     current_station: candidate.current,
     current_station_name: candidate.current,
-    location_kind: "live",
-    location_label: candidate.current ? `${candidate.current} 실시간` : "실시간 위치",
-    confidence: "높음",
-    method: "GTX-A 실시간 열차 위치 + 고정 구간 주행시간",
-    projected: false,
-    live_detected: true,
+    location_kind: candidate.live ? "live" : "expected",
+    location_label: candidate.live && candidate.current ? `${candidate.current} 실시간` : "GTX-A 시간표",
+    confidence: candidate.live ? "높음" : "중간",
+    method: candidate.live ? "GTX-A 실시간 열차 위치 + 구간 주행시간" : "GTX-A 시간표 + 구간 주행시간",
+    projected: !candidate.live,
+    live_detected: candidate.live,
     selected,
   };
 }
 
-function gtxCandidates(line: GtxLine, from: string, to: string, start: Date, rows: PositionRow[]): GtxCandidate[] {
+function realtimeGtxCandidates(line: GtxLine, from: string, to: string, start: Date, rows: PositionRow[]): GtxCandidate[] {
   const cfg = GTX_LINES[line];
   const { fromName, toName, fi, wanted } = candidateLine(line, from, to);
-  const now = nowKst();
   const out: GtxCandidate[] = [];
   for (const row of rows) {
     const current = canonStation(row.statnNm);
@@ -84,30 +85,62 @@ function gtxCandidates(line: GtxLine, from: string, to: string, start: Date, row
     if (ci < 0 || gtxDirection(line, row) !== wanted) continue;
     if ((wanted === 1 && ci > fi) || (wanted === -1 && ci < fi)) continue;
     const observed = parseDt(row.recptnDt ?? row.lastRecptnDt);
-    const age = Math.max(0, (now.getTime() - observed.getTime()) / 1000);
     const toBoard = gtxSecondsBetween(line, ci, fi);
-    const board = new Date(now.getTime() + Math.max(0, toBoard - age) * 1000);
+    const board = new Date(observed.getTime() + toBoard * 1000);
     const wait = (board.getTime() - start.getTime()) / 1000;
     if (wait < -5 || wait > MAX_BOARD_WAIT_SECONDS) continue;
     const alight = new Date(board.getTime() + gtxDuration(line, fromName, toName) * 1000);
     const trainNo = String(row.trainNo ?? row.btrainNo ?? "").trim();
     if (!trainNo) continue;
-    out.push({ board, alight, row, current, trainNo, wanted });
+    out.push({ board, alight, row, current, trainNo, wanted, live: true });
   }
   return out.sort((a, b) => a.alight.getTime() - b.alight.getTime() || a.board.getTime() - b.board.getTime());
 }
 
+function timetableGtxCandidates(line: GtxLine, from: string, to: string, start: Date): GtxCandidate[] {
+  return scheduledGtxCandidates(line, from, to, start, MAX_BOARD_WAIT_SECONDS).map((candidate) => ({
+    board: candidate.board,
+    alight: candidate.alight,
+    current: "",
+    trainNo: candidate.trainNo,
+    wanted: candidate.wanted,
+    live: false,
+  }));
+}
+
+function mergeGtxCandidates(live: GtxCandidate[], timetable: GtxCandidate[]): GtxCandidate[] {
+  const merged = [...live];
+  for (const scheduled of timetable) {
+    if (live.some((candidate) => Math.abs(candidate.board.getTime() - scheduled.board.getTime()) <= 120_000)) continue;
+    merged.push(scheduled);
+  }
+  return merged.sort((a, b) => a.alight.getTime() - b.alight.getTime() || Number(b.live) - Number(a.live) || a.board.getTime() - b.board.getTime()).slice(0, 10);
+}
+
 async function direct(line: GtxLine, from: string, to: string, start: Date, mode: string, fetchImpl: FetchLike): Promise<Serialized> {
   const { fromName, toName } = candidateLine(line, from, to);
-  const realtime = await fetchPosition(line, 5, fetchImpl);
-  const rows = positionRows(realtime.data);
-  const candidates = gtxCandidates(line, fromName, toName, start, rows);
-  if (!realtime.ok || !candidates.length) {
+  const timetable = timetableGtxCandidates(line, fromName, toName, start);
+  let rows: PositionRow[] = [];
+  let realtimeAvailable = false;
+  let realtimeQuery = "";
+  let cacheState = "";
+  try {
+    const realtime = await fetchPosition(line, 5, fetchImpl);
+    realtimeAvailable = realtime.ok;
+    rows = positionRows(realtime.data);
+    realtimeQuery = String(realtime.data?._jigeumta_query || "");
+    cacheState = String(realtime.data?._jigeumta_cache_state || "");
+  } catch {
+    // GTX routing remains timetable-capable when the realtime API is unavailable.
+  }
+  const live = realtimeGtxCandidates(line, fromName, toName, start, rows);
+  const candidates = mergeGtxCandidates(live, timetable);
+  if (!candidates.length) {
     return {
       ok: false,
-      error: `${line} ${fromName}→${toName} 현재 이용 가능한 열차를 찾지 못했습니다.`,
+      error: `${line} ${fromName}→${toName} 현재 시각 이후 운행 열차가 없습니다.`,
       positions: rows.length,
-      realtime_available: realtime.ok,
+      realtime_available: realtimeAvailable,
     };
   }
   const selected = candidates[0];
@@ -115,13 +148,12 @@ async function direct(line: GtxLine, from: string, to: string, start: Date, mode
   const ride = Math.round((selected.alight.getTime() - selected.board.getTime()) / 1000);
   const total = Math.round((selected.alight.getTime() - start.getTime()) / 1000);
   const segment = {
-    ...publicGtxCandidate(line, selected, fromName, toName, true),
+    ...publicGtxCandidate(line, selected, fromName, toName, start, true),
     index: 0,
-    wait_seconds: Math.max(0, Math.round((selected.board.getTime() - start.getTime()) / 1000)),
-    nearby_candidates: candidates.slice(0, 6).map((candidate) => publicGtxCandidate(line, candidate, fromName, toName, candidate.trainNo === selected.trainNo)),
+    nearby_candidates: candidates.slice(0, 6).map((candidate) => publicGtxCandidate(line, candidate, fromName, toName, start, candidate.trainNo === selected.trainNo)),
     previous_candidate: null,
-    realtime_query: realtime.data?._jigeumta_query,
-    cache_state: String(realtime.data?._jigeumta_cache_state || ""),
+    realtime_query: realtimeQuery,
+    cache_state: cacheState,
   };
   return {
     ok: true,
@@ -138,8 +170,8 @@ async function direct(line: GtxLine, from: string, to: string, start: Date, mode
     service_mode_reason: reason,
     segments: [segment],
     positions: rows.length,
-    matched: candidates.length,
-    warnings: [],
+    matched: live.length,
+    warnings: realtimeAvailable || live.length ? [] : ["GTX-A 실시간 위치를 사용하지 못해 시간표 기준으로 계산했습니다."],
   };
 }
 
@@ -149,7 +181,7 @@ function usableRoute(result: Serialized): boolean {
   if (!segments.length) return false;
   return segments.every((segment) => {
     const wait = Number(segment.wait_seconds ?? 0);
-    return Boolean(String(segment.train_no ?? "").trim()) && Number.isFinite(wait) && wait <= MAX_BOARD_WAIT_SECONDS;
+    return Boolean(String(segment.train_no ?? "").trim()) && Number.isFinite(wait) && wait >= -5 && wait <= MAX_BOARD_WAIT_SECONDS;
   });
 }
 
@@ -172,8 +204,13 @@ export async function calculateGtxTrip(payload: LiveTripPayload, fetchImpl: Fetc
   const { fromName, toName, ti, wanted } = candidateLine(line, String(segment.from), String(segment.to));
   const trainNo = String(payload.boarded_train_no ?? "").trim();
   if (!trainNo) return { ok: false, error: "탑승한 GTX-A 열차번호가 없습니다." };
-  const realtime = await fetchPosition(line, 5, fetchImpl);
-  const rows = positionRows(realtime.data);
+  let rows: PositionRow[] = [];
+  try {
+    const realtime = await fetchPosition(line, 5, fetchImpl);
+    rows = positionRows(realtime.data);
+  } catch {
+    // Continue using elapsed time while realtime is temporarily unavailable.
+  }
   const now = nowKst();
   const live = rows
     .filter((row) => String(row.trainNo ?? row.btrainNo ?? "").trim() === trainNo)
@@ -184,7 +221,7 @@ export async function calculateGtxTrip(payload: LiveTripPayload, fetchImpl: Fetc
   let current = "";
   let arrived = remaining <= 0;
   let projected = true;
-  let method = "GTX-A 실시간 재포착 대기 · 탑승 후 경과시간 추정";
+  let method = "GTX-A 시간표 · 탑승 후 경과시간 추적";
   if (live) {
     const cfg = GTX_LINES[line];
     current = canonStation(live.statnNm);
@@ -219,7 +256,7 @@ export async function calculateGtxTrip(payload: LiveTripPayload, fetchImpl: Fetc
     delay_seconds: 0,
     current_station: current,
     current_station_name: current,
-    location: current || "실시간 재포착 대기",
+    location: current || "시간표 진행 중",
     confidence: projected ? "중간" : "높음",
     method,
     projected,
@@ -237,13 +274,14 @@ export async function calculateGtxTrip(payload: LiveTripPayload, fetchImpl: Fetc
     remaining_seconds: remaining,
     current_segment_remaining_seconds: remaining,
     current_station: current,
-    current_status: arrived ? "도착" : current ? "운행 중" : "실시간 재포착 대기",
+    current_status: arrived ? "도착" : current ? "운행 중" : "시간표 진행 중",
     segments: [resultSegment],
     warnings: [],
   };
 }
 
 export async function calculateGtxHybridRoute(payload: CalculateRoutePayload, baseRoute: BaseRoute, fetchImpl: FetchLike = fetch): Promise<Serialized> {
+  if (!payload.segments.some((segment) => isGtxLine(String(segment.line)))) return baseRoute(payload);
   const start = parseDt(payload.start_time);
   let cursor = start;
   const results: Array<Record<string, unknown>> = [];
@@ -280,13 +318,15 @@ export async function calculateGtxHybridAuto(payload: AutoRoutePayload, baseRout
   const options = excludeGtx ? { excludeLines: GTX_LINE_NAMES } : undefined;
   let candidates;
   try {
-    candidates = autoCandidateRoutes(payload.from, payload.to, mode, 8, options);
+    candidates = autoCandidateRoutes(payload.from, payload.to, mode, 12, options);
   } catch (error) {
     return { ok: false, error: error instanceof Error ? error.message : "경로를 찾지 못했습니다." };
   }
   const scored: Array<{ path: (typeof candidates)[number]["path"]; segments: SegmentInput[]; result: Serialized }> = [];
   for (const candidate of candidates) {
-    const result = await calculateGtxHybridRoute({ start_time: formatKst(start), day: mode, segments: candidate.segments, refresh_only: false }, baseRoute, fetchImpl);
+    const result = candidate.segments.some((segment) => isGtxLine(String(segment.line)))
+      ? await calculateGtxHybridRoute({ start_time: formatKst(start), day: mode, segments: candidate.segments, refresh_only: false }, baseRoute, fetchImpl)
+      : await baseRoute({ start_time: formatKst(start), day: mode, segments: candidate.segments, refresh_only: false });
     if (usableRoute(result)) scored.push({ path: candidate.path, segments: candidate.segments, result });
   }
   if (!scored.length) {
@@ -320,7 +360,7 @@ export async function calculateGtxHybridAuto(payload: AutoRoutePayload, baseRout
     transfer_count: Math.max(0, selected.segments.length - 1),
     interchanges: candidateInterchanges(selected.segments),
     segments: selectedSegments,
-    selection_method: "통합 노선 그래프 + 실제 열차 후보 ETA",
+    selection_method: "통합 노선 그래프 + GTX-A 시간표 + 실시간 ETA",
     candidate_count: candidates.length,
     live_scored_count: scored.length,
     gtx_excluded: excludeGtx,
@@ -329,6 +369,7 @@ export async function calculateGtxHybridAuto(payload: AutoRoutePayload, baseRout
 }
 
 export async function calculateGtxHybridTrip(payload: LiveTripPayload, baseTrip: BaseTrip, baseRoute: BaseRoute, fetchImpl: FetchLike = fetch): Promise<Serialized> {
+  if (!payload.segments.some((segment) => isGtxLine(String(segment.line)))) return baseTrip(payload);
   const activeIndex = Number(payload.active_index ?? 0);
   if (activeIndex < 0 || activeIndex >= payload.segments.length) throw new Error("추적 중인 구간 번호가 올바르지 않습니다.");
   const active = payload.segments[activeIndex];
