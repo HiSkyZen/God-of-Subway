@@ -18,16 +18,15 @@ test("Vercel publishes only public assets and traces every engine data file into
     bunVersion?: string;
     outputDirectory?: string;
     regions?: string[];
-    functions?: Record<string, { includeFiles?: string[] }>;
+    functions?: Record<string, { includeFiles?: string }>;
     crons?: unknown;
   };
   expect(config.bunVersion).toBe("1.x");
   expect(config.outputDirectory).toBe("dist/public");
   expect(config.regions).toEqual(["icn1"]);
   expect(config.crons).toBeUndefined();
-  expect(config.functions?.["api/index.ts"]?.includeFiles).toEqual(expect.arrayContaining([
-    "schedule_weekday.json", "schedule_holiday.json", "stations.json",
-    "official_2to9_schedule.json", "korail_extra_lines_schedule.json",
-    "kr_holidays_2026_2035.json", "route_graph.json", "transfer_data.json",
-  ]));
+  expect(config.functions?.["api/index.ts"]?.includeFiles).toBe(
+    "{schedule_weekday.json,schedule_holiday.json,stations.json,official_2to9_schedule.json,korail_extra_lines_schedule.json,kr_holidays_2026_2035.json,route_graph.json,transfer_data.json}",
+  );
+  expect(await Bun.file("api/index.ts").text()).not.toContain("../src/server");
 });

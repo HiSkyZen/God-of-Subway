@@ -1,7 +1,7 @@
 import { afterEach, expect, test } from "bun:test";
 import { mkdtemp, readFile, readdir, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join, resolve } from "node:path";
+import { join, resolve, sep } from "node:path";
 import {
   pushAlertStore,
   pushSubscriptionStore,
@@ -632,7 +632,7 @@ test("alert registration calls the live engine after auth/rate checks and reject
 
 test("JSON stores share a file-path mutex and use atomic unique replacement under concurrency", async () => {
   const directory = await mkdtemp(join(tmpdir(), "jigeumta-push-store-"));
-  const safeRoot = resolve(tmpdir()) + "\\";
+  const safeRoot = resolve(tmpdir()) + sep;
   expect(resolve(directory).startsWith(safeRoot)).toBeTrue();
   try {
     Bun.env.PUSH_STORE_PATH = join(directory, ".push-subscriptions.json");

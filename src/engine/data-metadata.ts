@@ -7,10 +7,10 @@ export const DATASET_METADATA = {
   files: {
     "schedule_weekday.json": 2_600_100,
     "schedule_holiday.json": 2_374_538,
-    "stations.json": 1_494,
+    "stations.json": 1_389,
     "official_2to9_schedule.json": 11_405_979,
     "korail_extra_lines_schedule.json": 4_141_427,
-    "kr_holidays_2026_2035.json": 19_613,
+    "kr_holidays_2026_2035.json": 18_750,
     "route_graph.json": 158_465,
     "transfer_data.json": 147_060,
   },

@@ -1,4 +1,18 @@
-import { fetchHandler } from "../src/server";
+import { enginePort } from "../src/api/engine-adapter";
+import { createFetchHandler, type AssetProvider } from "../src/api/router";
+
+// Vercel serves dist/public directly. The Function is only responsible for
+// /api requests, so keep the server-only HTML import out of its dependency
+// graph. This avoids Vercel attempting to parse src/client/index.html as code.
+const unavailableAsset = (): Response => new Response(null, { status: 404 });
+const functionAssets: AssetProvider = {
+  index: unavailableAsset,
+  logo: unavailableAsset,
+  serviceWorker: unavailableAsset,
+  manifest: unavailableAsset,
+  icon: () => unavailableAsset(),
+};
+const fetchHandler = createFetchHandler(enginePort, functionAssets);
 
 const vercelFetch = (request: Request): Response | Promise<Response> => {
   const url = new URL(request.url);
