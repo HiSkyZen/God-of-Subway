@@ -6,7 +6,7 @@ import { BellIcon, ExperimentPanel, InstallSheet, LivePanel, PushOptInSheet, Sha
 import { UpstreamJourneyView } from "./journey-view";
 import { useClock, useToast } from "./hooks";
 import { parseServiceModeSelection } from "./pure";
-import { useJourneySearch } from "./use-journey-search";
+import { useJourneySearch, type JourneySearchOptions } from "./use-journey-search";
 import { useLiveJourney } from "./use-live-journey";
 import { usePushPwa } from "./use-push-pwa";
 
@@ -20,7 +20,7 @@ function initialTheme(): Theme {
   return window.matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light";
 }
 function timeText(date: Date): string {
-  return date.toLocaleTimeString("ko-KR", { hour: "numeric", minute: "2-digit", hour12: true }).replace(/\s/g, "");
+  return date.toLocaleTimeString("ko-KR", { hour: "numeric", minute: "2-digit", hour12: true }).replace(/\s+/g, " ").trim();
 }
 function timeValue(date: Date): string { return `${String(date.getHours()).padStart(2, "0")}:${String(date.getMinutes()).padStart(2, "0")}`; }
 function shiftClock(value: string, delta: number): string {
@@ -44,7 +44,7 @@ function App(): ReactElement {
   useEffect(() => {
     document.documentElement.dataset.theme = theme;
     localStorage.setItem("jigeumta_theme", theme);
-    document.querySelector('meta[name="theme-color"]')?.setAttribute("content", theme === "dark" ? "#0b1118" : "#ffffff");
+    document.querySelector('meta[name="theme-color"]')?.setAttribute("content", theme === "dark" ? "#101719" : "#f4f7f6");
   }, [theme]);
   useEffect(() => {
     search.setExperimentEnabled(experimentOptIn);
@@ -65,7 +65,15 @@ function App(): ReactElement {
     return new Date(now.getTime() + search.searchMinutes * 60_000);
   }, [now, search.exactTime, search.searchMinutes]);
 
-  const runSearch = async (event?: FormEvent, offset?: number): Promise<void> => { if (await search.search(event, offset)) live.clearLiveResult(); };
+  const runSearch = async (event?: FormEvent, offset?: number, options?: JourneySearchOptions): Promise<void> => {
+    event?.preventDefault();
+    if (live.liveTrip && live.liveTrip.phase !== "done") {
+      const proceed = window.confirm("새 경로를 조회하면 현재 추적이 중단됩니다. 계속할까요?");
+      if (!proceed) return;
+      live.stopTracking(true);
+    }
+    if (await search.search(undefined, offset, options)) live.clearLiveResult();
+  };
   const refreshJourney = async (): Promise<void> => { try { if (await live.refreshLiveJourney()) return; await search.refreshRoute(); } catch (caught: unknown) { notify(caught instanceof Error ? `갱신 실패: ${caught.message}` : "갱신에 실패했습니다."); } };
   const closeSuggestions = (side: "from" | "to"): void => { window.setTimeout(() => { const focused = document.activeElement; if (focused instanceof HTMLInputElement && focused.getAttribute("aria-controls")?.endsWith("-station-suggestions")) return; search.setActiveSuggestion((current) => current === side ? null : current); }, 140); };
   const shiftSearchTime = (minutes: number): void => { if (search.exactTime) search.setExactTime(shiftClock(search.exactTime, minutes)); else search.adjustTime(search.searchMinutes + minutes); };
@@ -122,7 +130,7 @@ function App(): ReactElement {
 
       {search.error && <p className="error-banner" role="alert"><strong>조회 실패</strong><span>{search.error}</span></p>}
 
-      {search.result ? <UpstreamJourneyView result={search.result} segments={activeSegments} arrivalTime={arrivalTime} totalSeconds={totalSeconds} activeIndex={live.liveTrip?.activeIndex ?? 0} liveTrip={visibleTrip} onBoard={live.startTracking} onRefresh={() => void refreshJourney()} /> : <section className="empty-state"><h1>출발역과 도착역만 입력하세요.</h1><p>현재 운행 중인 열차 위치와 실제 환승 소요시간을 반영해 최종 도착 시각을 계산합니다.</p></section>}
+      {search.result ? <UpstreamJourneyView result={search.result} segments={activeSegments} arrivalTime={arrivalTime} totalSeconds={totalSeconds} activeIndex={live.liveTrip?.activeIndex ?? 0} liveTrip={visibleTrip} onBoard={live.startTracking} onRefresh={() => void refreshJourney()} onExcludeGtx={() => void runSearch(undefined, undefined, { excludeGtx: true })} /> : <section className="empty-state"><h1>출발역과 도착역만 입력하세요.</h1><p>현재 운행 중인 열차 위치와 실제 환승 소요시간을 반영해 최종 도착 시각을 계산합니다.</p></section>}
 
       {live.liveTrip && <LivePanel trip={live.liveTrip} result={live.liveResult} alertActive={Boolean(push.pushAlert && !push.pushAlert.pending_cancel)} arrivalAlertCapable={push.arrivalAlertCapable} onAlert={() => void push.registerArrivalAlert(live.liveTrip)} onClearAlert={() => void push.clearArrivalAlert()} onFinishTransfer={() => void live.finishTransfer()} onAlight={live.handleAlight} onStop={live.stopTracking} />}
 
