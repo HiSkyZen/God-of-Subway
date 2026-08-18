@@ -43,11 +43,18 @@ export class ApiClient {
   }
 
   async post<T extends ApiEnvelope>(url: string, body: unknown, timeoutMs = this.defaultTimeoutMs): Promise<T> {
-    return this.request<T>(url, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body), cache: "no-store" }, timeoutMs);
+    return this.request<T>(url, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(this.withJourneyDebug(url, body)), cache: "no-store" }, timeoutMs);
   }
 
   async delete<T extends ApiEnvelope>(url: string, body: unknown, timeoutMs = this.defaultTimeoutMs): Promise<T> {
     return this.request<T>(url, { method: "DELETE", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body), cache: "no-store" }, timeoutMs);
+  }
+
+  private withJourneyDebug(url: string, body: unknown): unknown {
+    if (!["/api/route", "/api/auto_route", "/api/trip_update"].includes(url)) return body;
+    if (typeof window === "undefined" || localStorage.getItem("jigeumta_debug_query") !== "1") return body;
+    if (!body || typeof body !== "object" || Array.isArray(body)) return body;
+    return { ...(body as Record<string, unknown>), debug_mode: true };
   }
 
   private async request<T extends ApiEnvelope>(url: string, init: RequestInit, timeoutMs: number): Promise<T> {
