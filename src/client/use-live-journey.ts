@@ -35,7 +35,7 @@ export interface LiveJourneyController {
   startTracking(index: number, trainNo: string | number): void;
   finishTransfer(): Promise<void>;
   handleAlight(): void;
-  stopTracking(): void;
+  stopTracking(quiet?: boolean): void;
   refreshLiveJourney(): Promise<boolean>;
 }
 
@@ -43,6 +43,10 @@ function isStoredTrip(value: unknown): value is StoredTrip {
   return isRecord(value) && typeof value.activeIndex === "number" && ["ride", "transfer", "waiting", "done"].includes(String(value.phase))
     && typeof value.boardedTrainNo === "string" && Array.isArray(value.segments) && Array.isArray(value.displaySegments)
     && typeof value.journeyStartedAt === "string";
+}
+
+function shouldAdvance(result: RouteResponse): boolean {
+  return Boolean(result.segments?.[0]?.arrived) || Number(result.current_segment_remaining_seconds ?? result.remaining_seconds ?? 1) <= 0;
 }
 
 export function useLiveJourney(options: LiveJourneyOptions): LiveJourneyController {
@@ -67,31 +71,41 @@ export function useLiveJourney(options: LiveJourneyOptions): LiveJourneyControll
     const currentOptions = optionsRef.current;
     const currentTrip = liveTripRef.current;
     const nowValue = new Date();
+    const nowText = localDateTimeString(nowValue);
     let trip: StoredTrip;
     if (currentTrip?.phase === "waiting") {
       const next = boardWaitingTrain(currentTrip, index, normalizedTrainNo, nowValue);
       if (next === currentTrip) return;
       trip = next;
+    } else if (currentTrip?.phase === "ride" && currentTrip.activeIndex === index) {
+      trip = { ...currentTrip, boardedTrainNo: normalizedTrainNo, boardedAt: nowText };
     } else {
       const currentResult = currentOptions.result;
       if (!currentResult?.segments?.length) return;
-      const nowText = localDateTimeString(nowValue);
       trip = {
-        activeIndex: index, phase: "ride", boardedTrainNo: normalizedTrainNo, boardedAt: nowText, trackingStartedAt: nowText,
+        activeIndex: index,
+        phase: "ride",
+        boardedTrainNo: normalizedTrainNo,
+        boardedAt: nowText,
+        trackingStartedAt: nowText,
         platformStart: currentResult.start_time || null,
         segments: currentResult.segments.map((segment) => ({ line: segment.line, from: segment.from, to: segment.to, transfer_walk: segment.transfer_walk, transfer_seconds: segment.transfer_seconds, transfer_info: segment.transfer_info })),
-        day: currentOptions.day, baseline: currentOptions.baseline || null, previousNextTrain: null, displaySegments: currentResult.segments,
-        transferEndsAt: null, journeyStartedAt: nowText,
+        day: currentOptions.day,
+        baseline: currentOptions.baseline || null,
+        previousNextTrain: null,
+        displaySegments: currentResult.segments,
+        transferEndsAt: null,
+        journeyStartedAt: nowText,
       };
     }
     currentOptions.onBoardEvent(trip, index, normalizedTrainNo);
     persistLiveTrip(trip);
     setLiveResult(null);
     track("train_tracking_start", { line: trip.segments[index]?.line, train_no: normalizedTrainNo, segment_index: index + 1 });
-    currentOptions.notify(`${normalizedTrainNo}열차 추적을 시작했습니다.`);
+    currentOptions.notify(`${normalizedTrainNo}열차를 추적합니다.`);
     const alert = currentOptions.alert;
     if (alert && !alert.pending_cancel && alertNeedsTripReplacement(alert.trip_snapshot, trip)) {
-      void currentOptions.onSyncAlert(trip, true).then((saved) => { if (!saved) optionsRef.current.notify("다음 구간 도착 알림을 동기화하지 못했습니다."); });
+      void currentOptions.onSyncAlert(trip, true).then((saved) => { if (!saved) optionsRef.current.notify("도착 알림 동기화 실패"); });
     }
   }, [persistLiveTrip]);
 
@@ -101,29 +115,38 @@ export function useLiveJourney(options: LiveJourneyOptions): LiveJourneyControll
     const next = await apiClient.route(remainingRouteRequest(trip, new Date()));
     const latest = liveTripRef.current;
     if (!latest || latest.journeyStartedAt !== trip.journeyStartedAt || latest.phase === "ride" || latest.phase === "done" || remainingRouteStartIndex(latest) !== startIndex) return null;
+    const updated = { ...latest, displaySegments: mergeCalculatedSegments(latest.displaySegments, startIndex, next.segments) };
+    liveTripRef.current = updated;
+    setLiveTrip(updated);
+    writeStorage(sessionStorage, STORAGE_KEYS.liveTrip, updated);
     setLiveResult(next);
     optionsRef.current.onEtaEvent(next, "route_recalculation");
-    setLiveTrip((current) => {
-      if (!current || current.journeyStartedAt !== trip.journeyStartedAt) return current;
-      const updated = { ...current, displaySegments: mergeCalculatedSegments(current.displaySegments, startIndex, next.segments) };
-      liveTripRef.current = updated;
-      writeStorage(sessionStorage, STORAGE_KEYS.liveTrip, updated);
-      return updated;
-    });
     return next;
   }, []);
+
+  const autoBoardWaiting = useCallback((trip: StoredTrip, result: RouteResponse | null): void => {
+    if (!result || trip.phase !== "waiting") return;
+    const candidate = result.segments?.[0]?.train_no;
+    if (!candidate) return;
+    const latest = liveTripRef.current;
+    if (!latest || latest.phase !== "waiting" || latest.activeIndex !== trip.activeIndex || latest.journeyStartedAt !== trip.journeyStartedAt) return;
+    startTracking(latest.activeIndex, candidate);
+  }, [startTracking]);
 
   const finishTransfer = useCallback(async (): Promise<void> => {
     const current = liveTripRef.current;
     if (!current || current.phase !== "transfer") return;
-    const next = completeTransfer(current);
-    if (next === current) return;
-    persistLiveTrip(next);
+    const waiting = completeTransfer(current);
+    if (waiting === current) return;
+    persistLiveTrip(waiting);
     setLiveResult(null);
-    optionsRef.current.notify("환승을 마쳤습니다. 다음 실제 열차를 선택해 주세요.");
-    try { await recalculateRemainingRoute(next); }
-    catch (caught: unknown) { optionsRef.current.notify(caught instanceof Error ? `다음 열차 계산 실패: ${caught.message}` : "다음 열차를 계산하지 못했습니다."); }
-  }, [persistLiveTrip, recalculateRemainingRoute]);
+    try {
+      const calculated = await recalculateRemainingRoute(waiting);
+      autoBoardWaiting(waiting, calculated);
+    } catch (caught: unknown) {
+      optionsRef.current.notify(caught instanceof Error ? `다음 열차 계산 실패: ${caught.message}` : "다음 열차 계산 실패");
+    }
+  }, [autoBoardWaiting, persistLiveTrip, recalculateRemainingRoute]);
 
   const handleAlight = useCallback((): void => {
     const current = liveTripRef.current;
@@ -133,17 +156,23 @@ export function useLiveJourney(options: LiveJourneyOptions): LiveJourneyControll
     persistLiveTrip(next);
     if (next.phase === "done") {
       void optionsRef.current.onClearAlert(true).catch(() => undefined);
-      optionsRef.current.notify("목적지에 도착했습니다. 여정을 종료할 수 있습니다.");
-    } else optionsRef.current.notify("환승 구간입니다. 환승을 마친 뒤 다음 열차를 선택하세요.");
+      optionsRef.current.notify("목적지에 도착했습니다.");
+    } else optionsRef.current.notify("하차했습니다. 환승을 이어갑니다.");
   }, [persistLiveTrip]);
 
-  const stopTracking = useCallback((): void => {
+  const stopTracking = useCallback((quiet = false): void => {
     void optionsRef.current.onClearAlert(true).catch(() => undefined);
     liveTripRef.current = null;
     setLiveTrip(null);
     setLiveResult(null);
     sessionStorage.removeItem(STORAGE_KEYS.liveTrip);
-    optionsRef.current.notify("여정을 마쳤습니다.");
+    if (!quiet) optionsRef.current.notify("추적을 종료했습니다.");
+  }, []);
+
+  const applyRideUpdate = useCallback((current: StoredTrip, next: RouteResponse): StoredTrip => {
+    const merged = mergeCalculatedSegments(current.displaySegments, current.activeIndex, next.segments);
+    const tracked = { ...current, displaySegments: merged, boardedTrainNo: String(next.boarded_train_no || current.boardedTrainNo) };
+    return shouldAdvance(next) ? alightTrip(tracked, new Date()) : tracked;
   }, []);
 
   const refreshLiveJourney = useCallback(async (): Promise<boolean> => {
@@ -153,14 +182,24 @@ export function useLiveJourney(options: LiveJourneyOptions): LiveJourneyControll
       const next = await apiClient.tripUpdate(tripUpdatePayload(current));
       const latest = liveTripRef.current;
       if (!latest || latest.journeyStartedAt !== current.journeyStartedAt || latest.phase !== "ride") return true;
-      const updated = { ...latest, displaySegments: mergeCalculatedSegments(latest.displaySegments, latest.activeIndex, next.segments), boardedTrainNo: next.boarded_train_no || latest.boardedTrainNo };
+      const updated = applyRideUpdate(latest, next);
       setLiveResult(next);
       persistLiveTrip(updated);
+      if (updated.phase === "done") void optionsRef.current.onClearAlert(true).catch(() => undefined);
       return true;
     }
-    if (current.phase === "transfer" || current.phase === "waiting") await recalculateRemainingRoute(current);
+    if (current.phase === "transfer") {
+      const end = current.transferEndsAt ? new Date(current.transferEndsAt).getTime() : Number.POSITIVE_INFINITY;
+      if (Number.isFinite(end) && end <= Date.now()) await finishTransfer();
+      else await recalculateRemainingRoute(current);
+      return true;
+    }
+    if (current.phase === "waiting") {
+      const next = await recalculateRemainingRoute(current);
+      autoBoardWaiting(current, next);
+    }
     return true;
-  }, [persistLiveTrip, recalculateRemainingRoute]);
+  }, [applyRideUpdate, autoBoardWaiting, finishTransfer, persistLiveTrip, recalculateRemainingRoute]);
 
   useEffect(() => {
     if (!liveTrip || liveTrip.phase === "done") return undefined;
@@ -172,28 +211,40 @@ export function useLiveJourney(options: LiveJourneyOptions): LiveJourneyControll
       try {
         const requestTrip = liveTripRef.current;
         if (!requestTrip || requestTrip.phase === "done") return;
-        if (requestTrip.phase !== "ride") { await recalculateRemainingRoute(requestTrip); return; }
+        if (requestTrip.phase === "transfer") {
+          const end = requestTrip.transferEndsAt ? new Date(requestTrip.transferEndsAt).getTime() : Number.POSITIVE_INFINITY;
+          if (Number.isFinite(end) && end <= Date.now()) await finishTransfer();
+          else await recalculateRemainingRoute(requestTrip);
+          return;
+        }
+        if (requestTrip.phase === "waiting") {
+          const next = await recalculateRemainingRoute(requestTrip);
+          autoBoardWaiting(requestTrip, next);
+          return;
+        }
         const next = await apiClient.tripUpdate(tripUpdatePayload(requestTrip));
         if (cancelled) return;
         const latest = liveTripRef.current;
         if (!latest || latest.journeyStartedAt !== requestTrip.journeyStartedAt || latest.phase !== "ride" || latest.activeIndex !== requestTrip.activeIndex || latest.boardedAt !== requestTrip.boardedAt) return;
         setLiveResult(next);
-        const merged = mergeCalculatedSegments(latest.displaySegments, latest.activeIndex, next.segments);
-        const tracked = { ...latest, displaySegments: merged, boardedTrainNo: next.boarded_train_no || latest.boardedTrainNo };
-        const updated = Boolean(next.segments?.[0]?.arrived) ? alightTrip(tracked, new Date()) : tracked;
+        const updated = applyRideUpdate(latest, next);
         persistLiveTrip(updated);
-        if (updated.phase === "transfer") optionsRef.current.notify("환승 구간입니다. 환승을 마친 뒤 다음 열차를 선택하세요.");
-        if (updated.phase === "done") { void optionsRef.current.onClearAlert(true).catch(() => undefined); optionsRef.current.notify("목적지 도착이 확인되었습니다."); }
+        if (updated.phase === "transfer") optionsRef.current.notify("하차했습니다. 환승을 이어갑니다.");
+        if (updated.phase === "done") {
+          void optionsRef.current.onClearAlert(true).catch(() => undefined);
+          optionsRef.current.notify("목적지 도착이 확인되었습니다.");
+        }
         const alert = optionsRef.current.alert;
         if (alert && !alert.pending_cancel && updated.phase === "ride" && alertNeedsTripReplacement(alert.trip_snapshot, updated)) void optionsRef.current.onSyncAlert(updated, true);
         optionsRef.current.onEtaEvent(next, "tracking_update");
-      } catch (caught: unknown) { if (!cancelled) optionsRef.current.notify(caught instanceof Error ? caught.message : "추적 갱신에 실패했습니다."); }
-      finally { polling = false; }
+      } catch (caught: unknown) {
+        if (!cancelled) optionsRef.current.notify(caught instanceof Error ? caught.message : "추적 갱신 실패");
+      } finally { polling = false; }
     };
     void poll();
     const timer = window.setInterval(() => { void poll(); }, 20_000);
     return () => { cancelled = true; window.clearInterval(timer); };
-  }, [liveTrip?.activeIndex, liveTrip?.boardedTrainNo, liveTrip?.phase, liveTrip?.transferEndsAt, options.alert?.alert_id, options.alert?.trip_snapshot, options.alert?.pending_cancel, persistLiveTrip, recalculateRemainingRoute]);
+  }, [applyRideUpdate, autoBoardWaiting, finishTransfer, liveTrip?.activeIndex, liveTrip?.boardedTrainNo, liveTrip?.phase, liveTrip?.transferEndsAt, options.alert?.alert_id, options.alert?.trip_snapshot, options.alert?.pending_cancel, persistLiveTrip, recalculateRemainingRoute]);
 
   useEffect(() => {
     if (!liveTrip || liveTrip.phase !== "transfer" || !liveTrip.transferEndsAt) return undefined;
