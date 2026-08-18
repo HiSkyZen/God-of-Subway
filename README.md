@@ -46,29 +46,54 @@
 
 서울교통공사 운영구간이 아닌 경우 제공정보의 한계로 역 출발 현황은 안내되지 않습니다.
 
-## 로컬 실행
+## 로컬 실행 (Bun)
 
 서울 열린데이터광장 인증키가 필요합니다. [data.seoul.go.kr](https://data.seoul.go.kr)에서 무료로 발급받을 수 있습니다.
 
-```bash
-run.bat
+```powershell
+bun install
+bun run dev
 ```
 
-실행 후 콘솔에서 API 키를 입력하면 브라우저가 자동으로 열립니다. 환경변수로 넘기려면:
+Windows에서는 `run.bat`도 사용할 수 있습니다. Bun은 `.env`를 자동 로드합니다.
+환경변수 예시는:
 
 ```
 SEOUL_API_KEY=<서울 열린데이터광장 인증키>
 ```
 
-외부 Python 패키지는 필요하지 않습니다.
+서버는 `src/server.ts`의 `Bun.serve`이며, API 엔진은 `src/engine` public export
+경계만 사용합니다.
 
 ## 배포
 
-Vercel에 배포되어 있습니다. `server.py`의 FastAPI 앱이 Python Function으로 실행됩니다.
+Vercel은 `api/index.ts`의 Bun Function adapter를 실행합니다. `vercel.json`의
+`bunVersion: "1.x"`는 Vercel 공식 Bun runtime 설정입니다. 일반 Bun 호스팅은
+`bun run build:all` 후 `bun run start`를 사용합니다.
 
 필수 환경변수는 `SEOUL_API_KEY` 하나이며, **Production뿐 아니라 Preview 환경에도 설정해야** 브랜치 미리보기에서 조회가 동작합니다.
 
 자세한 설정은 [VERCEL_DEPLOY.md](VERCEL_DEPLOY.md)를 참고하세요.
+
+Web Push 선택 기능은 `GET /api/push/public-key`, `POST/DELETE
+/api/push/subscriptions`, `POST/DELETE /api/push/alerts`, `POST
+/api/push/alerts/status`를 제공합니다. VAPID
+환경변수와 운영용 Redis REST 저장소가 없으면 health의 `push_capable`이 false가
+되며 구독 저장은 거부됩니다. 개발 전용 `POST /api/push/test`는 실제 `web-push`
+발송과 만료(404/410) 구독 정리를 검증할 때만 활성화합니다. ETA 알림은
+`POST /api/push/dispatch`로 구현되어 있으며 Vercel Pro/외부 cron의 `GET` +
+`Authorization: Bearer $CRON_SECRET` 또는 장기 실행 Bun의 opt-in interval로
+호출합니다. `arrival_alert_capable`은 scheduler가 명시된 경우에만 true이며,
+Hobby에는 분 단위 cron을 설정하지 않습니다.
+
+구독·알림 등록은 decoded Web Push key 길이, endpoint/payload 크기, 요청 빈도,
+source별/전체 저장 한도를 검증합니다. Redis dispatch는 영속 HSCAN cursor와
+tokenized lease를 사용해 앞 alert 고착과 중복 발송을 막습니다. ETA 계산 뒤에도
+현재 alert ID를 원자적으로 재확인·claim하므로 그 사이 교체된 alert를 잘못
+발송하지 않습니다. 운영 Redis REST URL은 credential 없는 HTTPS만 허용하며,
+유효하지 않으면 token을 전송하지 않고 capability를 비활성화합니다. 관리 token은
+URL이 아닌 JSON body로만 전달하고 SHA-256 digest를 고정 길이 timing-safe 비교하며,
+보안 헤더는 inline script 없는 CSP를 포함합니다.
 
 > API 키는 저장소에 커밋하지 않습니다. 이미 노출된 키는 새 키로 교체하세요.
 
@@ -76,10 +101,10 @@ Vercel에 배포되어 있습니다. `server.py`의 FastAPI 앱이 Python Functi
 
 | 파일 | 역할 |
 | :-- | :-- |
-| `server.py` | Vercel FastAPI entrypoint |
-| `app.py` | 로컬 실행용 서버 |
-| `engine.py` | 경로 탐색 · ETA 계산 엔진 |
-| `index.html` | 프론트엔드 |
+| `src/server.ts` | Bun.serve entrypoint 및 공용 Fetch handler |
+| `api/index.ts` | Vercel Bun Function adapter |
+| `src/engine` | 타입화된 경로 탐색 · ETA 계산 엔진 |
+| `src/client` | React/PWA frontend, manifest, service worker |
 | `route_graph.json` | 공식 시간표 기반 역-노선 그래프 |
 | `stations.json` · `transfer_data.json` | 역 정보 · 환승 소요시간 |
 | `schedule_*.json` · `official_2to9_schedule.json` | 공식 시간표 |

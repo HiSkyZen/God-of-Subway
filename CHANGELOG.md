@@ -421,7 +421,7 @@ V13.2.2 — GA4 열차 추적 기능 사용 집계
 SEOUL_API_KEY=<서울 열린데이터광장 인증키>
 
 서버 시작 명령
-python app.py
+bun run dev
 
 주의
 - 현재 즐겨찾기는 브라우저 localStorage 기반이므로 다른 기기/브라우저와 동기화되지 않습니다.

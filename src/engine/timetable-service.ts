@@ -1,0 +1,188 @@
+import { repository } from "./data-repository";
+import {
+  EXTRA_LINES, LINE_NAMES,
+  type EngineData, type LineName, type ResolvedMode, type ServiceMode, type Stop, type Train,
+} from "../types/domain";
+import type { RawTrain } from "../types/domain";
+
+const data = (): EngineData => repository.data;
+const aliases: Record<string, string> = {
+  "서울": "서울역", "지하서울": "서울역", "성균관": "성균관대", "가산디": "가산디지털단지", "금천구": "금천구청",
+  "동두중": "동두천중앙", "백마고": "백마고지", "쌍용나": "쌍용(나사렛대)", "온양온": "온양온천", "평지제": "평택지제",
+  "종로5": "종로5가", "1종로": "종로3가", "1동대": "동대문", "1지청": "청량리", "총신대입구": "총신대입구(이수)",
+  "이수": "총신대입구(이수)", "1양원": "양원", "1양정": "양정", "디엠시": "디지털미디어시티", "홍대입": "홍대입구",
+  "효창공": "효창공원앞", "항공대": "한국항공대", "강남구": "강남구청", "로데오": "압구정로데오", "남동인": "남동인더스파크",
+  "소래포": "소래포구", "수원시": "수원시청", "매탄권": "매탄권선", "신길온": "능길", "신길온천": "능길", "인천논": "인천논현",
+  "신인천": "인천", "신수원": "수원", "세종릉": "세종대왕릉", "도예촌": "신둔도예촌", "경광주": "경기광주", "신이매": "이매",
+  "신판교": "판교", "신초지": "초지", "시흥능": "시흥능곡", "시흥청": "시흥시청", "신신현": "신현", "신신천": "신천",
+  "시흥대": "시흥대야", "신소사": "소사", "부천종": "부천종합운동장", "신김포": "김포공항", "평내호": "평내호평",
+};
+
+export function canonStation(value: unknown): string {
+  let station = String(value ?? "").trim().replaceAll(" ", "");
+  if (station.endsWith("역") && station !== "서울역") station = station.slice(0, -1);
+  return aliases[station] ?? station;
+}
+
+export function normTrain(value: unknown): string { return String(value ?? "").replace(/\s+/g, "").toUpperCase(); }
+export function trainDigits(value: unknown): string { return normTrain(value).replace(/\D/g, "").replace(/^0+/, "") || "0"; }
+
+function dateAtUtc(year: number, month: number, day: number, hour = 0, minute = 0, second = 0): Date {
+  return new Date(Date.UTC(year, month, day, hour, minute, second, 0));
+}
+
+export function nowKst(): Date {
+  const parts = new Intl.DateTimeFormat("en-CA", {
+    timeZone: "Asia/Seoul", year: "numeric", month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit", second: "2-digit", hourCycle: "h23",
+  }).formatToParts(new Date());
+  const n = Object.fromEntries(parts.filter((x) => x.type !== "literal").map((x) => [x.type, x.value]));
+  return dateAtUtc(Number(n.year), Number(n.month) - 1, Number(n.day), Number(n.hour), Number(n.minute), Number(n.second));
+}
+
+export function parseDt(value: unknown): Date {
+  if (!value) return nowKst();
+  const text = String(value).trim();
+  for (const match of [/^(\d{4})-(\d\d)-(\d\d) (\d\d):(\d\d):(\d\d)$/, /^(\d{4})(\d\d)(\d\d)(\d\d)(\d\d)(\d\d)$/]) {
+    const m = text.match(match);
+    if (m) return dateAtUtc(Number(m[1]), Number(m[2]) - 1, Number(m[3]), Number(m[4]), Number(m[5]), Number(m[6]));
+  }
+  for (const match of [/^(\d\d):(\d\d):(\d\d)$/, /^(\d\d)(\d\d)(\d\d)$/]) {
+    const m = text.match(match);
+    if (m) { const n = nowKst(); return dateAtUtc(n.getUTCFullYear(), n.getUTCMonth(), n.getUTCDate(), Number(m[1]), Number(m[2]), Number(m[3])); }
+  }
+  const digits = text.replace(/\D/g, "");
+  if (digits.length >= 14) {
+    const m = digits.slice(0, 14).match(/^(\d{4})(\d\d)(\d\d)(\d\d)(\d\d)(\d\d)$/);
+    if (m) return dateAtUtc(Number(m[1]), Number(m[2]) - 1, Number(m[3]), Number(m[4]), Number(m[5]), Number(m[6]));
+  }
+  return nowKst();
+}
+
+export function formatKst(value: Date): string {
+  const p = (n: number) => String(n).padStart(2, "0");
+  return `${value.getUTCFullYear()}-${p(value.getUTCMonth() + 1)}-${p(value.getUTCDate())} ${p(value.getUTCHours())}:${p(value.getUTCMinutes())}:${p(value.getUTCSeconds())}`;
+}
+export function formatClock(value: Date): string { return formatKst(value).slice(11, 16); }
+export function dayStart(value: Date): Date { return dateAtUtc(value.getUTCFullYear(), value.getUTCMonth(), value.getUTCDate()); }
+export function addSeconds(value: Date, seconds: number): Date { return new Date(value.getTime() + seconds * 1000); }
+
+export function alignClock(actual: Date, scheduled: number): number {
+  const sec = actual.getUTCHours() * 3600 + actual.getUTCMinutes() * 60 + actual.getUTCSeconds();
+  return [sec - 86400, sec, sec + 86400, sec + 172800].reduce((best, candidate) => Math.abs(candidate - scheduled) < Math.abs(best - scheduled) ? candidate : best);
+}
+
+export function statusName(value: unknown): string {
+  const raw = String(value ?? "").trim();
+  return ({ "0": "진입", "1": "도착", "2": "출발", "3": "전역출발" } as Record<string, string>)[raw] ?? (/[-+]?\d+(?:\.\d+)?/.test(raw) ? "" : raw);
+}
+export function clockToSec(value: unknown): number {
+  const p = String(value ?? "").split(":");
+  if (p.length < 2) throw new Error("시각은 HH:MM 형식이어야 합니다.");
+  return Number(p[0]) * 3600 + Number(p[1]) * 60 + (p.length > 2 ? Number(p[2]) : 0);
+}
+export function clockDtNear(value: unknown, ref = nowKst()): Date {
+  const text = String(value ?? "").trim();
+  const full = text.match(/^(\d{4})-(\d\d)-(\d\d)[ T](\d\d):(\d\d):(\d\d)$/);
+  if (full) return dateAtUtc(Number(full[1]), Number(full[2]) - 1, Number(full[3]), Number(full[4]), Number(full[5]), Number(full[6]));
+  const compact = text.match(/^(\d{14})$/);
+  if (compact) return parseDt(text);
+  const sec = clockToSec(text);
+  const base = dayStart(ref);
+  return [-1, 0, 1].map((d) => addSeconds(base, d * 86400 + sec)).reduce((best, candidate) => Math.abs(candidate.getTime() - ref.getTime()) < Math.abs(best.getTime() - ref.getTime()) ? candidate : best);
+}
+export function scheduleDtAfter(schedSec: number, ready: Date, delay = 0): Date | null {
+  const base = dayStart(ready); const values = [-2, -1, 0, 1].map((d) => addSeconds(base, d * 86400 + schedSec + delay)).filter((x) => x.getTime() >= ready.getTime() - 5000);
+  return values.length ? values.reduce((a, b) => a.getTime() < b.getTime() ? a : b) : null;
+}
+export function scheduleDtBefore(schedSec: number, ready: Date, delay = 0, windowSeconds = 600): Date | null {
+  const base = dayStart(ready); const values = [-2, -1, 0, 1].map((d) => addSeconds(base, d * 86400 + schedSec + delay)).filter((x) => { const gap = (ready.getTime() - x.getTime()) / 1000; return gap > 5 && gap <= windowSeconds; });
+  return values.length ? values.reduce((a, b) => a.getTime() > b.getTime() ? a : b) : null;
+}
+export function nearestScheduleDt(sec: number, ref: Date, delay = 0): Date {
+  const base = dayStart(ref); return [-2, -1, 0, 1, 2].map((d) => addSeconds(base, d * 86400 + sec + delay)).reduce((a, b) => Math.abs(a.getTime() - ref.getTime()) < Math.abs(b.getTime() - ref.getTime()) ? a : b);
+}
+
+export function holidayInfo(value: Date): { name?: string } | undefined { return data().holidays.dates?.[`${value.getUTCFullYear()}-${String(value.getUTCMonth() + 1).padStart(2, "0")}-${String(value.getUTCDate()).padStart(2, "0")}`]; }
+export function autoServiceMode(value: Date): [ResolvedMode, string] {
+  const holiday = holidayInfo(value); if (holiday) return ["END", holiday.name ?? "공휴일"];
+  const wd = value.getUTCDay(); if (wd === 6) return ["SAT", "토요일"]; if (wd === 0) return ["END", "일요일"]; return ["DAY", "평일"];
+}
+export function serviceDayReference(ref = nowKst()): [Date, boolean] { const cut = new Date(ref.getTime()); cut.setUTCHours(2, 0, 0, 0); return ref.getTime() < cut.getTime() ? [addSeconds(ref, -86400), true] : [ref, false]; }
+export function resolveServiceMode(mode: string, ref = nowKst()): [ResolvedMode, string] {
+  if (mode === "AUTO") { const [serviceRef, rolled] = serviceDayReference(ref); const [resolved, reason] = autoServiceMode(serviceRef); return [resolved, rolled ? `전일 운행일 · ${reason} (02시 기준)` : reason]; }
+  const value = mode === "DAY" || mode === "SAT" || mode === "END" ? mode : "END";
+  return [value, ({ DAY: "평일 수동 선택", SAT: "토요일 수동 선택", END: "일요일·공휴일 수동 선택" } as Record<string, string>)[value]];
+}
+export function chooseModes(mode: string): ["weekday" | "holiday", ResolvedMode] { if (mode === "DAY") return ["weekday", "DAY"]; if (mode === "SAT") return ["holiday", "SAT"]; return ["holiday", "END"]; }
+
+function stopFrom(raw: { station?: string; arr?: number | null; dep?: number | null; call?: boolean }): Stop { return { station: canonStation(raw.station), arr: raw.arr ?? null, dep: raw.dep ?? null, call: raw.call !== false }; }
+export function normalizeS1Train(tn: string, raw: RawTrain): Train { const n = normTrain(tn); return { train_no: tn, direction: raw.direction ?? "", service: /^K19\d{2}$/.test(n) ? "express" : raw.service ?? "local", start: canonStation(raw.start), dest: canonStation(raw.dest), stops: (raw.stops ?? []).map(stopFrom) }; }
+export function normalizeExtraTrain(tn: string, raw: RawTrain): Train { return { train_no: tn, direction: raw.direction ?? "", service: raw.service ?? "local", start: canonStation(raw.start), dest: canonStation(raw.dest), linked_train_no: normTrain(raw.linked_train_no), stops: (raw.stops ?? []).map(stopFrom) }; }
+export function normalizeMetroTrain(tn: string, raw: unknown): Train { const tuple = Array.isArray(raw) ? raw : []; const compact = Array.isArray(tuple[4]) ? tuple[4] : []; return { train_no: tn, direction: String(tuple[0] ?? ""), service: String(tuple[1] ?? "") === "1" ? "express" : "local", start: String(tuple[2] ?? ""), dest: String(tuple[3] ?? ""), stops: compact.filter(Array.isArray).map((s) => stopFrom({ station: String(s[0] ?? ""), arr: typeof s[1] === "number" ? s[1] : null, dep: typeof s[2] === "number" ? s[2] : null })) }; }
+
+const lineNum: Record<string, string> = Object.fromEntries(Array.from({ length: 9 }, (_, i) => [`${i + 1}호선`, String(i + 1)]));
+const continuationCache = new Map<string, Record<string, { next_train_no: string; gap_seconds: number; station: string; next_start_sec: number }>>();
+const virtualCache = new Map<string, Train | null>();
+
+export function getTrain(line: string, mode: string, rawNo: unknown): Train | null {
+  const [korailDay, metroWeek] = chooseModes(mode); const n = normTrain(rawNo); const digits = trainDigits(rawNo); const d = data();
+  if (line === "1호선") { const trains = korailDay === "weekday" ? d.s1.weekday : d.s1.holiday; if (trains[n]) return normalizeS1Train(n, trains[n]); const found = Object.entries(trains).filter(([k]) => trainDigits(k) === digits); return found.length === 1 ? normalizeS1Train(found[0][0], found[0][1]) : null; }
+  if ((EXTRA_LINES as readonly string[]).includes(line)) { const trains = d.extra[line]?.trains?.[korailDay] ?? {}; if (trains[n]) return normalizeExtraTrain(n, trains[n]); const exact = Object.entries(trains).filter(([k]) => trainDigits(k) === digits); if (exact.length === 1) return normalizeExtraTrain(exact[0][0], exact[0][1]); const linked = Object.entries(trains).filter(([, x]) => normTrain(x.linked_train_no) === n || trainDigits(x.linked_train_no) === digits); return linked.length === 1 ? normalizeExtraTrain(linked[0][0], linked[0][1]) : null; }
+  const trains = d.official.days?.[metroWeek]?.[lineNum[line]] ?? {}; if (trains[n]) return normalizeMetroTrain(n, trains[n]); const found = Object.entries(trains).filter(([k]) => trainDigits(k) === digits); return found.length === 1 ? normalizeMetroTrain(found[0][0], found[0][1]) : null;
+}
+
+export function allTrains(line: string, mode: string): Train[] {
+  const [korailDay, metroWeek] = chooseModes(mode); const d = data();
+  if (line === "1호선") return Object.entries(korailDay === "weekday" ? d.s1.weekday : d.s1.holiday).map(([k, v]) => normalizeS1Train(k, v));
+  if ((EXTRA_LINES as readonly string[]).includes(line)) return Object.entries(d.extra[line]?.trains?.[korailDay] ?? {}).map(([k, v]) => normalizeExtraTrain(k, v));
+  return Object.entries(d.official.days?.[metroWeek]?.[lineNum[line]] ?? {}).map(([k, v]) => normalizeMetroTrain(k, v));
+}
+
+function firstSec(tr: Train): number | null { for (const s of tr.stops) { const sec = s.dep ?? s.arr; if (sec !== null) return sec; } return null; }
+function lastSec(tr: Train): number | null { for (let i = tr.stops.length - 1; i >= 0; i -= 1) { const sec = tr.stops[i].arr ?? tr.stops[i].dep; if (sec !== null) return sec; } return null; }
+function line2Mainline(tr: Train): boolean { const names = new Set(tr.stops.map((x) => canonStation(x.station))); return tr.stops.length > 10 && names.has("성수") && (names.has("뚝섬") || names.has("건대입구")); }
+
+export function continuationLinks(line: string, mode: string): Record<string, { next_train_no: string; gap_seconds: number; station: string; next_start_sec: number }> {
+  const key = `${line}|${mode}`; const existing = continuationCache.get(key); if (existing) return existing; const empty = {}; if (line !== "2호선" && line !== "6호선") { continuationCache.set(key, empty); return empty; }
+  const trains = Object.fromEntries(allTrains(line, mode).map((x) => [normTrain(x.train_no), x])); const preds: Array<[string, Train, number]> = []; const succs: Array<[string, Train, number]> = [];
+  for (const [tn, tr] of Object.entries(trains)) { const first = firstSec(tr); const last = lastSec(tr); if (first === null || last === null) continue; if (line === "2호선") { if (!line2Mainline(tr)) continue; if (canonStation(tr.dest) === "성수") preds.push([tn, tr, last]); if (canonStation(tr.start) === "성수") succs.push([tn, tr, first]); } else { if (canonStation(tr.dest) === "응암" && tr.direction === "UP") preds.push([tn, tr, last]); if (canonStation(tr.start) === "응암" && tr.direction === "DOWN") succs.push([tn, tr, first]); } }
+  const links: Record<string, { next_train_no: string; gap_seconds: number; station: string; next_start_sec: number }> = {};
+  if (line === "2호선") { const edges: Array<[number, number, number, string, string]> = []; for (const [ptn, pred, pend] of preds) for (const [stn, succ, sstart] of succs) { if (succ.direction !== pred.direction) continue; let gap = sstart - pend; while (gap < 0) gap += 86400; if (gap >= 0 && gap <= 120) edges.push([gap, pend, sstart, ptn, stn]); } edges.sort((a, b) => a[0] - b[0] || a[1] - b[1] || a[2] - b[2] || a[3].localeCompare(b[3]) || a[4].localeCompare(b[4])); const usedP = new Set<string>(); const usedS = new Set<string>(); for (const [gap, , sstart, ptn, stn] of edges) { if (usedP.has(ptn) || usedS.has(stn)) continue; usedP.add(ptn); usedS.add(stn); links[ptn] = { next_train_no: stn, gap_seconds: Math.trunc(gap), station: "성수", next_start_sec: Math.trunc(sstart) }; } } else { const used = new Set<string>(); for (const [ptn, , pend] of preds) { const candidates: Array<[number, string, number]> = []; for (const [stn, , sstart] of succs) { if (used.has(stn)) continue; let gap = sstart - pend; while (gap < 0) gap += 86400; if (gap >= 0 && gap <= 180) candidates.push([gap, stn, sstart]); } candidates.sort((a, b) => a[0] - b[0] || a[1].localeCompare(b[1])); if (candidates.length && (candidates.length === 1 || candidates[1][0] !== candidates[0][0])) { const [gap, stn, sstart] = candidates[0]; used.add(stn); links[ptn] = { next_train_no: stn, gap_seconds: Math.trunc(gap), station: "응암", next_start_sec: Math.trunc(sstart) }; } } }
+  continuationCache.set(key, links); return links;
+}
+
+export function shiftedStop(stop: Stop, offset = 0): Stop { return { station: canonStation(stop.station), arr: stop.arr === null ? null : stop.arr + offset, dep: stop.dep === null ? null : stop.dep + offset, call: stop.call }; }
+export function mergedContinuationTrain(line: string, mode: string, trainNo: string): Train | null {
+  const key = `${line}|${mode}|${normTrain(trainNo)}`; if (virtualCache.has(key)) return virtualCache.get(key) ?? null; const link = continuationLinks(line, mode)[normTrain(trainNo)]; if (!link) { virtualCache.set(key, null); return null; }
+  const pred = getTrain(line, mode, trainNo); const succ = getTrain(line, mode, link.next_train_no); if (!pred || !succ) { virtualCache.set(key, null); return null; }
+  const pend = lastSec(pred); const sstart = firstSec(succ); let offset = 0; while (pend !== null && sstart !== null && sstart + offset < pend) offset += 86400;
+  const merged = pred.stops.map((x) => shiftedStop(x)); const next = succ.stops.map((x) => shiftedStop(x, offset)); if (merged.length && next.length && canonStation(merged[merged.length - 1].station) === link.station && canonStation(next[0].station) === link.station) { const first = next.shift() as Stop; merged[merged.length - 1].arr ??= first.arr; merged[merged.length - 1].dep = first.dep ?? merged[merged.length - 1].dep; merged[merged.length - 1].call = merged[merged.length - 1].call || first.call; }
+  merged.push(...next); const result: Train = { train_no: pred.train_no, continuation_train_no: succ.train_no, train_numbers: [pred.train_no, succ.train_no], continuation_station: link.station, continuation_gap_seconds: link.gap_seconds, continuation_start_sec: link.next_start_sec + offset, physical_continuation: true, direction: pred.direction, continuation_direction: succ.direction, service: pred.service, start: pred.start, dest: succ.dest, stops: merged }; virtualCache.set(key, result); return result;
+}
+
+export function routePair(stops: Stop[], start: unknown, end: unknown, minStartIdx = 0): [number, number] | null { const s = canonStation(start); const e = canonStation(end); const starts = stops.map((x, i) => [i, x] as const).filter(([i, x]) => i >= minStartIdx && canonStation(x.station) === s && x.call).map(([i]) => i); const ends = stops.map((x, i) => [i, x] as const).filter(([, x]) => canonStation(x.station) === e && x.call).map(([i]) => i); const pairs = starts.flatMap((i) => ends.filter((j) => j > i).map((j) => [i, j] as [number, number])); return pairs.length ? pairs.reduce((a, b) => b[1] - b[0] < a[1] - a[0] ? b : a) : null; }
+export function indices(stops: Stop[], station: unknown): number[] { const c = canonStation(station); return stops.map((x, i) => canonStation(x.station) === c ? i : -1).filter((x) => x >= 0); }
+export function firstCurrentIndex(stops: Stop[], current: unknown, beforeOrAt?: number): number | null { const i = indices(stops, current); const valid = beforeOrAt === undefined ? i : i.filter((x) => x <= beforeOrAt); return valid.length ? valid[valid.length - 1] : i[0] ?? null; }
+export function stopBoardSec(stop: Stop): number | null { return stop.dep ?? stop.arr; }
+export function stopAlightSec(stop: Stop): number | null { return stop.arr ?? stop.dep; }
+export function stopTimeSec(stop: Stop): number | null { return stop.dep ?? stop.arr; }
+
+export function routeTrains(line: string, mode: string, start: string, end: string): Train[] { const result = allTrains(line, mode).filter((tr) => routePair(tr.stops, start, end)); if (line === "2호선" || line === "6호선") for (const ptn of Object.keys(continuationLinks(line, mode))) { const link = continuationLinks(line, mode)[ptn]; const pred = getTrain(line, mode, ptn); const succ = getTrain(line, mode, link.next_train_no); if (!pred || !succ || routePair(pred.stops, start, end) || routePair(succ.stops, start, end)) continue; const virtual = mergedContinuationTrain(line, mode, ptn); if (virtual && routePair(virtual.stops, start, end)) result.push(virtual); } return result; }
+
+export function stationOptions(): Record<string, string[]> {
+  const sets = new Map<string, Set<string>>(LINE_NAMES.map((line) => [line, new Set<string>()]));
+  for (const edges of Object.values(data().graph.modes ?? {})) {
+    for (const edge of edges) {
+      if (!Array.isArray(edge) || edge.length < 3 || typeof edge[0] !== "string") continue;
+      const stations = sets.get(edge[0]); if (!stations) continue;
+      stations.add(canonStation(edge[1])); stations.add(canonStation(edge[2]));
+    }
+  }
+  return Object.fromEntries(LINE_NAMES.map((line) => [line, [...(sets.get(line) ?? [])].filter(Boolean).sort()]));
+}
+
+export function activeTrainNoForVirtual(train: Train, ref: Date, delay = 0): string { if (!train.physical_continuation || !train.continuation_train_no || train.continuation_start_sec === undefined) return train.train_no; const midnight = serviceOccurrenceMidnight(train, ref, delay); return ref.getTime() >= addSeconds(midnight, train.continuation_start_sec + delay).getTime() ? train.continuation_train_no : train.train_no; }
+export function serviceOccurrenceMidnight(train: Train, ref: Date, delay = 0): Date { const points = train.stops.map(stopTimeSec).filter((x): x is number => x !== null); const base = dayStart(ref); if (!points.length) return base; const first = Math.min(...points) + delay; const last = Math.max(...points) + delay; const values = [-2, -1, 0, 1].map((d) => { const midnight = addSeconds(base, d * 86400); const st = addSeconds(midnight, first); const en = addSeconds(midnight, last); const score = ref >= st && ref <= en ? 0 : ref < st ? (st.getTime() - ref.getTime()) / 1000 : (ref.getTime() - en.getTime()) / 1000; return [score, midnight] as const; }); return values.reduce((a, b) => a[0] < b[0] ? a : b)[1]; }
+
+export const STATIONS_BY_LINE = stationOptions();
+export { LINE_NAMES, EXTRA_LINES };

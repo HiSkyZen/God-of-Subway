@@ -1,8 +1,41 @@
 {
   "$schema": "https://openapi.vercel.sh/vercel.json",
+  "bunVersion": "1.x",
+  "regions": ["icn1"],
+  "buildCommand": "bun run build:all",
+  "outputDirectory": "dist/public",
+  "rewrites": [
+    { "source": "/logo", "destination": "/jigeumta_logo_140.png" },
+    { "source": "/api", "destination": "/api" },
+    { "source": "/api/:path*", "destination": "/api" }
+  ],
+  "headers": [
+    {
+      "source": "/(.*)",
+      "headers": [
+        { "key": "Content-Security-Policy", "value": "default-src 'self'; script-src 'self' https://www.googletagmanager.com; connect-src 'self' https://www.google-analytics.com https://region1.google-analytics.com https://*.google-analytics.com; img-src 'self' data: https://www.google-analytics.com https://www.googletagmanager.com; style-src 'self'; font-src 'self'; worker-src 'self'; manifest-src 'self'; object-src 'none'; base-uri 'self'; frame-ancestors 'none'; form-action 'self'" },
+        { "key": "X-Content-Type-Options", "value": "nosniff" },
+        { "key": "X-Frame-Options", "value": "DENY" },
+        { "key": "Referrer-Policy", "value": "strict-origin-when-cross-origin" },
+        { "key": "Permissions-Policy", "value": "camera=(), microphone=(), geolocation=(), payment=(), usb=()" }
+      ]
+    },
+    { "source": "/logo", "headers": [{ "key": "Content-Type", "value": "image/png" }] },
+    { "source": "/sw.js", "headers": [{ "key": "Service-Worker-Allowed", "value": "/" }, { "key": "Cache-Control", "value": "no-cache" }] }
+  ],
   "functions": {
-    "server.py": {
-      "excludeFiles": "{run.bat,README.txt,__pycache__/**}"
+    "api/index.ts": {
+      "maxDuration": 60,
+      "includeFiles": [
+        "schedule_weekday.json",
+        "schedule_holiday.json",
+        "stations.json",
+        "official_2to9_schedule.json",
+        "korail_extra_lines_schedule.json",
+        "kr_holidays_2026_2035.json",
+        "route_graph.json",
+        "transfer_data.json"
+      ]
     }
   }
 }

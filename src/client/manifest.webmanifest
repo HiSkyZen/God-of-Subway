@@ -1,0 +1,17 @@
+{
+  "id": "./",
+  "name": "지금타 · 라이브 지하철 ETA",
+  "short_name": "지금타",
+  "start_url": "/",
+  "scope": "/",
+  "display": "standalone",
+  "theme_color": "#ffffff",
+  "background_color": "#f7f9fc",
+  "lang": "ko-KR",
+  "categories": ["navigation", "travel"],
+  "icons": [
+    { "src": "/icons/icon-192.png", "sizes": "192x192", "type": "image/png", "purpose": "any" },
+    { "src": "/icons/icon-512.png", "sizes": "512x512", "type": "image/png", "purpose": "any" },
+    { "src": "/icons/icon-maskable-512.png", "sizes": "512x512", "type": "image/png", "purpose": "maskable" }
+  ]
+}
