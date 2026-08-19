@@ -5,9 +5,11 @@ export type ResolvedMode = "DAY" | "SAT" | "END";
 export type LineName =
   | "1호선" | "2호선" | "3호선" | "4호선" | "5호선" | "6호선" | "7호선" | "8호선" | "9호선"
   | "경의중앙선" | "수인분당선" | "경춘선" | "경강선" | "서해선" | "공항철도" | "신분당선"
+  | "인천1호선" | "인천2호선" | "용인에버라인" | "김포골드라인" | "의정부경전철"
   | "GTX-A(북부)" | "GTX-A(남부)";
 
-export const EXTRA_LINES: readonly LineName[] = ["경의중앙선", "수인분당선", "경춘선", "경강선", "서해선", "공항철도", "신분당선", "GTX-A(북부)", "GTX-A(남부)"];
+export const TIMETABLE_ONLY_LINES: readonly LineName[] = ["인천1호선", "인천2호선", "용인에버라인", "김포골드라인", "의정부경전철"];
+export const EXTRA_LINES: readonly LineName[] = ["경의중앙선", "수인분당선", "경춘선", "경강선", "서해선", "공항철도", "신분당선", ...TIMETABLE_ONLY_LINES, "GTX-A(북부)", "GTX-A(남부)"];
 export const LINE_NAMES: readonly LineName[] = [
   "1호선", "2호선", "3호선", "4호선", "5호선", "6호선", "7호선", "8호선", "9호선", ...EXTRA_LINES,
 ];

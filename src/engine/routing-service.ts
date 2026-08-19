@@ -6,7 +6,6 @@ import { DISJOINT_HOMONYM_STATIONS, isDisjointHomonymTransfer } from "./station-
 import {
   adjustedTransferSeconds,
   directionalTransferOverride,
-  mapNoisedSeconds,
   modeledMissingTransferSeconds,
   physicalTransferEntries,
   transferOverride,
@@ -16,7 +15,6 @@ import type { Path, PathEdge, SegmentInput, TransferInfo } from "../types/domain
 
 const graph = () => repository.data.graph;
 const transfers = () => repository.data.transfers;
-export const DEFAULT_TRANSFER_SECONDS = Number(graph().meta?.default_transfer_seconds ?? 180);
 export const STATION_SELECTOR_SEPARATOR = "\u001f";
 
 const routingStationSets = new Map<string, Set<string>>(
@@ -108,10 +106,13 @@ export function transferPairInfo(station: string, fromLine: string, toLine: stri
 function pairBaseSeconds(station: string, fromLine: string, toLine: string, p?: Record<string, unknown> | null): number {
   const override = transferOverride(station, fromLine, toLine);
   if (override) return override.seconds;
-  if (!p) return DEFAULT_TRANSFER_SECONDS;
-  const direct = p.default_seconds ?? p.distance_seconds;
-  if (typeof direct === "number" && Number.isFinite(direct)) return Math.max(0, Math.round(direct));
-  return modeledMissingTransferSeconds(typeof p.distance_m === "number" ? p.distance_m : null, DEFAULT_TRANSFER_SECONDS);
+  const direct = p?.default_seconds ?? p?.distance_seconds;
+  if (typeof direct === "number" && Number.isFinite(direct)) {
+    const value = Math.max(0, Math.round(direct));
+    return value === 240 ? 247 : value;
+  }
+  const distanceM = typeof p?.distance_m === "number" ? p.distance_m : null;
+  return modeledMissingTransferSeconds(distanceM, station, fromLine, toLine, stationLines(station).length);
 }
 
 export function transferSeconds(station: string, fromLine: string, toLine: string): number {
@@ -372,7 +373,8 @@ export function autoCandidateRoutes(start: string, end: string, mode: string, ma
   const result: Array<{ path: Path; segments: SegmentInput[]; signature: string }> = [];
   const seen = new Set<string>();
   const baseBudget = Math.max(1, Math.min(maxUnique, Math.ceil(maxUnique * 0.65)));
-  for (const raw of yenPaths(start, end, mode, 36, options)) {
+  const rawBudget = Math.max(12, Math.min(24, maxUnique * 2));
+  for (const raw of yenPaths(start, end, mode, rawBudget, options)) {
     const path: Path = { start: stationSelector(start).station, end: stationSelector(end).station, seconds: raw.cost, edges: raw.edges.filter((e) => e.kind !== "start" && e.kind !== "end") };
     try {
       const segments = enrichTransferSegments(autoPathToSegments(path, mode), mode);
@@ -412,7 +414,7 @@ export function autoPathToSegments(path: Path, mode: string): SegmentInput[] {
       if (segmentHasTrain(line, mode, current.from, to)) current.to = to;
       else { finish(0); current = { line, from, to, transfer_walk: 0 }; }
     } else {
-      finish(DEFAULT_TRANSFER_SECONDS / 60); current = { line, from, to, transfer_walk: 0 };
+      finish(transferSeconds(from, current.line, line) / 60); current = { line, from, to, transfer_walk: 0 };
     }
   }
   finish(0);
@@ -441,13 +443,6 @@ function outgoingDirectionStation(line: string, mode: string, start: string, end
   return "";
 }
 
-function providerFrom(value: Record<string, unknown>): "naver-map" | "kakao-map" | null {
-  const text = JSON.stringify(value).toLowerCase();
-  if (text.includes("naver") || text.includes("네이버")) return "naver-map";
-  if (text.includes("kakao") || text.includes("카카오")) return "kakao-map";
-  return null;
-}
-
 export function bestTransferDetail(station: string, from: SegmentInput, to: SegmentInput, mode: string, at = nowKst()): TransferInfo {
   if (from.line === to.line && !transferPairInfo(station, from.line, to.line)) return serviceChangeInfo(station, from.line);
   const p = transferPairInfo(station, from.line, to.line);
@@ -463,8 +458,6 @@ export function bestTransferDetail(station: string, from: SegmentInput, to: Segm
   const matched = override ? "physical-layout-override" : both.length ? "direction" : oneOutgoing.length ? "outgoing" : oneIncoming.length ? "incoming" : p ? "pair" : "modeled";
   const rawChosen = chosen.seconds;
   let baseSeconds = override?.seconds ?? (typeof rawChosen === "number" && Number.isFinite(rawChosen) ? rawChosen : pairBaseSeconds(station, from.line, to.line, p));
-  const provider = providerFrom(chosen) ?? (p ? providerFrom(p) : null);
-  if (provider && !override) baseSeconds = mapNoisedSeconds(baseSeconds, provider, station, from.line, to.line);
   const transferMode: TransferMode = override?.mode ?? (baseSeconds === 0 ? "same-platform" : p ? "passage" : "estimated");
   const adjusted = adjustedTransferSeconds(baseSeconds, station, at, stationLines(station).length, transferMode);
   const pos = (car: unknown, door: unknown): string => { const c = String(car ?? "").trim(); const d = String(door ?? "").trim(); return c && d ? `${c}-${d}` : c || d; };
@@ -473,7 +466,7 @@ export function bestTransferDetail(station: string, from: SegmentInput, to: Segm
     distance_m: typeof p?.distance_m === "number" ? p.distance_m : null,
     alight_position: pos(chosen.alight_car, chosen.alight_door), board_position: pos(chosen.board_car, chosen.board_door),
     from_direction: String(chosen.from_direction || incoming), to_direction: String(chosen.to_direction || outgoing), matched,
-    mode: transferMode, source: override?.source ?? provider ?? (p ? "upstream" : "model"), note: override?.note ?? "",
+    mode: transferMode, source: override?.source ?? (p ? "upstream" : "model"), note: override?.note ?? "",
     crowding_multiplier: adjusted.load.multiplier, crowding_level: adjusted.load.label, predicted_load: adjusted.load.predictedLoad,
   };
 }

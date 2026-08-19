@@ -10,6 +10,8 @@ const runtimeDataFiles = [
   "kr_holidays_2026_2035.json",
   "route_graph.json",
   "transfer_data.json",
+  "urban_schedule.json",
+  "transfer_overlay.json",
 ] as const;
 if (includeFiles !== "data/*.json") throw new Error(`Vercel function runtime-data glob is stale: ${includeFiles || "<missing>"}`);
 for (const required of runtimeDataFiles) {

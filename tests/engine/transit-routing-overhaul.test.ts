@@ -1,7 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import { RAPID_SERVICE_LINES } from "../../src/engine/rapid-service";
 import { autoFindPath, stationRequiresLineSelection, stationSelector, transferSeconds } from "../../src/engine/routing-service";
-import { deterministicMapNoise, directionalTransferOverride, transferLoadEstimate } from "../../src/engine/transfer-policy";
+import { directionalTransferOverride, transferLoadEstimate } from "../../src/engine/transfer-policy";
 
 describe("transit routing overhaul", () => {
   test("current rapid-service coverage is explicit", () => {
@@ -26,11 +26,6 @@ describe("transit routing overhaul", () => {
     expect(directionalTransferOverride("초지", "4호선", "수인분당선", "고잔", "안산")).toMatchObject({ seconds: 60, mode: "cross-platform" });
   });
 
-  test("map-derived observations get stable tens-of-seconds noise", () => {
-    const a = deterministicMapNoise("naver-map", "교대", "2호선", "3호선");
-    const b = deterministicMapNoise("naver-map", "교대", "2호선", "3호선");
-    expect(a).toBe(b); expect(a).toBeGreaterThanOrEqual(20); expect(a).toBeLessThanOrEqual(59);
-  });
 
   test("rush-hour crowding weight is bounded at 1.75 and off-peak is neutral", () => {
     const peak = transferLoadEstimate("서울역", new Date(Date.UTC(2026, 7, 20, 8, 0, 0)), 4);

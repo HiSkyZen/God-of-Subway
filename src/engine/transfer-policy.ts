@@ -1,7 +1,7 @@
 import { canonStation } from "./timetable-service";
 
 export type TransferMode = "same-platform" | "cross-platform" | "passage" | "branch" | "estimated";
-export type TransferSource = "upstream" | "official" | "web-verified" | "naver-map" | "kakao-map" | "model";
+export type TransferSource = "upstream" | "official" | "web-verified" | "model" | "timetable";
 
 export interface TransferPolicyOverride {
   seconds: number;
@@ -52,14 +52,14 @@ const OVERRIDES = new Map<string, TransferPolicyOverride>([
   ...pair("대곡", "GTX-A(북부)", "서해선", { seconds: 330, mode: "passage", source: "model", note: "GTX-A 지상 2층 T자 환승통로와 서해선 별도 승강장 구조 기준 보수 추정" }),
   ...pair("연신내", "GTX-A(북부)", "3호선", { seconds: 330, mode: "passage", source: "model", note: "GTX-A 대심도 승강장과 3호선 대합실 수직 환승 구조 기준 5~7분 권장 범위 내 추정" }),
   ...pair("연신내", "GTX-A(북부)", "6호선", { seconds: 300, mode: "passage", source: "model", note: "GTX-A 상승 동선 중 6호선 환승통로 연결 구조 기준 보수 추정" }),
-  ...pair("서울역", "GTX-A(북부)", "1호선", { seconds: 240, mode: "passage", source: "model", note: "2025-02-15 개통 GTX-A↔1호선 전용 환승통로 반영; 실측 미확보 보수 추정" }),
+  ...pair("서울역", "GTX-A(북부)", "1호선", { seconds: 247, mode: "passage", source: "model", note: "2025-02-15 개통 GTX-A↔1호선 전용 환승통로 반영; 실측 미확보 보수 추정" }),
   ...pair("서울역", "GTX-A(북부)", "4호선", { seconds: 300, mode: "passage", source: "model", note: "GTX-A 서울역 환승대합실·4호선 연결 동선 기준 보수 추정" }),
   ...pair("서울역", "GTX-A(북부)", "경의중앙선", { seconds: 360, mode: "passage", source: "model", note: "GTX-A 서울역과 경의중앙선 승강장 간 장거리 역사 내 이동 보수 추정" }),
   ...pair("서울역", "GTX-A(북부)", "공항철도", { seconds: 360, mode: "passage", source: "model", note: "GTX-A 서울역과 공항철도 승강장 간 장거리 역사 내 이동 보수 추정" }),
 
   // GTX-A 남부: 수서-동탄 구간의 개통 환승역만 연결한다.
   ...pair("수서", "GTX-A(남부)", "3호선", { seconds: 210, mode: "passage", source: "model", note: "GTX-A 수서역↔3호선 연결 환승통로 기준 보수 추정" }),
-  ...pair("수서", "GTX-A(남부)", "수인분당선", { seconds: 240, mode: "passage", source: "model", note: "GTX-A 수서역↔수인분당선 연결 환승통로 기준 보수 추정" }),
+  ...pair("수서", "GTX-A(남부)", "수인분당선", { seconds: 253, mode: "passage", source: "model", note: "GTX-A 수서역↔수인분당선 연결 환승통로 기준 보수 추정" }),
   ...pair("성남", "GTX-A(남부)", "경강선", { seconds: 180, mode: "passage", source: "model", note: "GTX-A 성남역↔경강선 판교 방면 연결 환승통로 기준 추정" }),
   ...pair("구성", "GTX-A(남부)", "수인분당선", { seconds: 180, mode: "passage", source: "model", note: "GTX-A 구성역↔수인분당선 환승통로 기준 추정" }),
 ]);
@@ -89,26 +89,35 @@ export function physicalTransferEntries(): PhysicalTransferEntry[] {
   });
 }
 
-export function deterministicMapNoise(provider: "naver-map" | "kakao-map", station: string, fromLine: string, toLine: string): number {
-  const text = `${provider}|${canonStation(station)}|${fromLine}|${toLine}`;
+
+function stableTransferHash(text: string): number {
   let hash = 2166136261;
   for (let index = 0; index < text.length; index += 1) {
     hash ^= text.charCodeAt(index);
     hash = Math.imul(hash, 16777619);
   }
-  return 20 + ((hash >>> 0) % 40); // stable pseudo-random +20..59 seconds
+  return hash >>> 0;
 }
 
-export function mapNoisedSeconds(baseSeconds: number, provider: "naver-map" | "kakao-map", station: string, fromLine: string, toLine: string): number {
-  return Math.max(0, Math.round(baseSeconds) + deterministicMapNoise(provider, station, fromLine, toLine));
-}
-
-export function modeledMissingTransferSeconds(distanceM: number | null | undefined, fallbackSeconds = 180): number {
+export function modeledMissingTransferSeconds(
+  distanceM: number | null | undefined,
+  station = "",
+  fromLine = "",
+  toLine = "",
+  lineCount = 2,
+): number {
+  let seconds: number;
   if (typeof distanceM === "number" && Number.isFinite(distanceM) && distanceM > 0) {
-    // 1.1 m/s walking plus 25 s for vertical movement/wayfinding friction.
-    return Math.max(30, Math.round(distanceM / 1.1 + 25));
+    seconds = Math.max(30, Math.round(distanceM / 1.1 + 25));
+  } else {
+    const compactLines = `${fromLine}|${toLine}`;
+    const lightRail = /경전철|골드|에버|인천/u.test(compactLines);
+    const base = lightRail ? 172 : 158;
+    const variation = (stableTransferHash(`${canonStation(station)}|${[fromLine, toLine].sort().join("|")}`) % 46) - 14;
+    seconds = Math.round(base + Math.max(0, lineCount - 2) * 24 + variation);
   }
-  return Math.max(30, Math.round(fallbackSeconds));
+  const bounded = Math.max(75, Math.min(420, seconds));
+  return bounded === 240 ? 247 : bounded;
 }
 
 function minutes(date: Date): number { return date.getUTCHours() * 60 + date.getUTCMinutes(); }

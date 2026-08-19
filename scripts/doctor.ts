@@ -15,11 +15,17 @@ for (const [file, expected] of Object.entries(DATASET_METADATA.files)) {
   if (actual !== expected) failures.push(`${path}: ${actual} != ${expected}`);
 }
 
-const transfers = await Bun.file(dataFile("transfer_data.json")).json() as { meta?: Record<string, unknown>; pairs?: Record<string, Record<string, unknown>> };
-const pairs = Object.values(transfers.pairs ?? {});
+type Pair = Record<string, unknown>;
+const imported = await Bun.file(dataFile("transfer_data.json")).json() as { pairs?: Record<string, Pair> };
+const completion = await Bun.file(dataFile("transfer_overlay.json")).json() as { pairs?: Record<string, Pair> };
+const merged = { ...(imported.pairs ?? {}), ...(completion.pairs ?? {}) };
+const pairs = Object.values(merged);
 const missingDurations = pairs.filter((pair) => !Number.isFinite(Number(pair.default_seconds ?? pair.distance_seconds))).length;
-console.log(`[doctor] transfer pairs=${pairs.length}, raw missing duration=${missingDurations}, runtime fallback=${String(transfers.meta?.fallback_seconds ?? 180)}s`);
+const placeholder = pairs.filter((pair) => Number(pair.default_seconds ?? pair.distance_seconds) === 240).length;
+console.log(`[doctor] transfer imported=${Object.keys(imported.pairs ?? {}).length}, completion=${Object.keys(completion.pairs ?? {}).length}, runtime=${pairs.length}, missing=${missingDurations}, placeholder_240=${placeholder}`);
 console.log(`[doctor] transfer upstream=${DATASET_METADATA.transfers.upstream_version}, verification backlog=${DATASET_METADATA.transfers.audit_remaining_needs_verification}`);
+if (missingDurations) failures.push(`runtime transfer durations missing: ${missingDurations}`);
+if (placeholder) failures.push(`240-second placeholder transfer durations remain: ${placeholder}`);
 
 if (failures.length) {
   console.error("\n[doctor] FAIL");

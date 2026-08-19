@@ -72,18 +72,7 @@ export async function calculateRoute(payload: Record<string, unknown>, positionC
 
 export async function calculateAutoRoute(payload: Record<string, unknown>, fetchImpl: FetchLike = fetch): Promise<Serialized> {
   const typed = payload as unknown as AutoRoutePayload;
-  let result = await calculateGtxHybridAuto(typed, (next) => calculateRouteImpl(next, undefined, fetchImpl), fetchImpl);
-  if (!Boolean(typed.exclude_gtx) && result.ok !== false && usesGtx(result)) {
-    const withoutGtx = await calculateGtxHybridAuto({ ...typed, exclude_gtx: true }, (next) => calculateRouteImpl(next, undefined, fetchImpl), fetchImpl);
-    if (shouldPreferNonGtxTie(result, withoutGtx)) {
-      result = {
-        ...withoutGtx,
-        gtx_excluded: false,
-        gtx_tie_preferred_non_gtx: true,
-        selection_method: "동일 도착시각 GTX-A 비이용 경로 우선",
-      };
-    }
-  }
+  const result = await calculateGtxHybridAuto(typed, (next) => calculateRouteImpl(next, undefined, fetchImpl), fetchImpl);
   return publicizeResult(result);
 }
 
@@ -122,7 +111,7 @@ export function healthSnapshot(): Record<string, unknown> {
     cache: cacheSnapshot(),
     debug_enabled: debugEnabled(),
     station_line_count: Object.keys(stationsByLine).length,
-    transfer_policy: { upstream: "V13.5.4", runtime_missing_duration: 0, crowding_cap: 1.75, homonym_line_selection: true },
+    transfer_policy: { upstream: "V13.5.4", completion_overlay: true, runtime_missing_duration: 0, crowding_cap: 1.75, homonym_line_selection: true },
     gtx_a: { mode: "integrated-route-graph", sections: Object.fromEntries(Object.entries(GTX_LINES).map(([line, cfg]) => [line, cfg.stations])) },
   };
 }

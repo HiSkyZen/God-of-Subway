@@ -1,4 +1,4 @@
-import { LINE_NAMES, type LineName, type PositionCache, type PositionCacheEntry, type PositionRow, type RealtimeEnvelope, type Train } from "../types/domain";
+import { LINE_NAMES, TIMETABLE_ONLY_LINES, type LineName, type PositionCache, type PositionCacheEntry, type PositionRow, type RealtimeEnvelope, type Train } from "../types/domain";
 import { cacheGetJson, cacheReleaseRefreshLease, cacheSetJson, cacheTryRefreshLease } from "../infra/cache";
 import { logEvent } from "../infra/observability";
 import { allTrains, canonStation, firstCurrentIndex, parseDt, resolveServiceMode, stopTimeSec, nowKst } from "./timetable-service";
@@ -177,6 +177,7 @@ async function fetchRealtimeSource(query: string, timeout: number, fetchImpl: Fe
 }
 
 export async function fetchPosition(line: string, timeout = 5, fetchImpl: FetchLike = fetch): Promise<{ ok: boolean; error: string | null; data: RealtimeEnvelope | null }> {
+  if ((TIMETABLE_ONLY_LINES as readonly string[]).includes(line)) return { ok: false, error: "시간표 전용 노선", data: null };
   let lastError = "실시간 위치 조회 실패";
   let lastData: RealtimeEnvelope | null = null;
   for (const query of queries(line)) {
