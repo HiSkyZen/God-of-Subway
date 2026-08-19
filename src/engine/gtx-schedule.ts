@@ -35,6 +35,7 @@ function serviceOccurrence(start: Date, clock: string, stationOffset: number): D
 }
 
 export interface GtxScheduledCandidate {
+  /** Internal schedule identity only; never a public GTX-A service number. */
   trainNo: string;
   board: Date;
   alight: Date;
@@ -62,7 +63,7 @@ export function scheduledGtxCandidates(line: GtxLine, from: string, to: string, 
     const wait = (board.getTime() - start.getTime()) / 1000;
     if (wait < -5 || wait > maxWaitSeconds) return;
     out.push({
-      trainNo: `${line === "GTX-A(북부)" ? "GTXN" : "GTXS"}-${forward ? "F" : "R"}-${String(index + 1).padStart(3, "0")}`,
+      trainNo: `GTX-SCHED-${line === "GTX-A(북부)" ? "N" : "S"}-${forward ? "F" : "R"}-${String(index + 1).padStart(3, "0")}`,
       board,
       alight: new Date(board.getTime() + rideSeconds * 1000),
       wanted,
