@@ -64,10 +64,13 @@ test("GTX route exposes a one-click exclusion rerun when an ordinary route is po
 });
 
 test("GTX-exclusive endpoints never offer an impossible GTX exclusion", () => {
-  const gtx: RouteSegment[] = [{ line: "GTX-A(북부)", from: "운정중앙", to: "서울역", train_no: "X1011", tracking_id: "1011", board_dt: "2026-08-18 23:45:00", alight_dt: "2026-08-18 23:57:00" }];
-  const gtxResult: AutoRouteResponse = { ok: true, from: "운정중앙", to: "서울역", arrival_time: "2026-08-18 23:57:00", segments: gtx };
-  const html = renderToStaticMarkup(<UpstreamJourneyView result={gtxResult} segments={gtx} arrivalTime={gtxResult.arrival_time} totalSeconds={720} activeIndex={0} liveTrip={null} onBoard={() => undefined} onRefresh={() => undefined} onExcludeGtx={() => undefined} />);
-  expect(html).not.toContain("GTX-A 제외하기");
+  for (const station of ["운정중앙", "킨텍스", "동탄"]) {
+    const north = station !== "동탄";
+    const gtx: RouteSegment[] = [{ line: north ? "GTX-A(북부)" : "GTX-A(남부)", from: station, to: north ? "서울역" : "수서", train_no: "X1011", tracking_id: "1011", board_dt: "2026-08-18 23:45:00", alight_dt: "2026-08-18 23:57:00" }];
+    const gtxResult: AutoRouteResponse = { ok: true, from: station, to: north ? "서울역" : "수서", arrival_time: "2026-08-18 23:57:00", segments: gtx };
+    const html = renderToStaticMarkup(<UpstreamJourneyView result={gtxResult} segments={gtx} arrivalTime={gtxResult.arrival_time} totalSeconds={720} activeIndex={0} liveTrip={null} onBoard={() => undefined} onRefresh={() => undefined} onExcludeGtx={() => undefined} />);
+    expect(html).not.toContain("GTX-A 제외하기");
+  }
 });
 
 test("public train number is shown without leaking the Shinbundang timetable id", () => {
