@@ -1,3 +1,19 @@
+const vercel = await Bun.file("vercel.json").json() as { functions?: Record<string, { includeFiles?: string }> };
+const includeFiles = vercel.functions?.["api/index.ts"]?.includeFiles || "";
+for (const required of [
+  "schedule_weekday.json",
+  "schedule_holiday.json",
+  "stations.json",
+  "official_2to9_schedule.json",
+  "korail_extra_lines_schedule.json",
+  "sinbundang_schedule.json",
+  "kr_holidays_2026_2035.json",
+  "route_graph.json",
+  "transfer_data.json",
+]) {
+  if (!includeFiles.includes(required)) throw new Error(`Vercel function is missing required runtime data: ${required}`);
+}
+
 Bun.env.PORT = "0";
 // The generated AOT bundle intentionally has no checked-in declaration file.
 // @ts-expect-error generated dist module is validated by this script at runtime
@@ -22,10 +38,21 @@ try {
     if (mime && !(response.headers.get("content-type") || "").includes(mime)) throw new Error(`${path}: unexpected MIME`);
     if (path === "/") {
       const html = await response.clone().text();
-      for (const match of html.matchAll(/(?:src|href)="\.\.\/([^"?]+)"/g)) {
-        const asset = await fetch(new URL(`/${match[1]}`, server.url));
-        if (asset.status !== 200) throw new Error(`HTML asset failed: ${match[1]} (${asset.status})`);
+      const assets = [...html.matchAll(/(?:src|href)="([^"?]+)(?:\?[^\"]*)?"/g)].map((match) => match[1]).filter((value) => value.startsWith("/") || value.startsWith("../"));
+      if (!assets.some((value) => /\.js$/.test(value)) || !assets.some((value) => /\.css$/.test(value))) throw new Error("Built HTML must reference bundled JS and CSS assets");
+      for (const value of assets) {
+        const normalized = value.startsWith("../") ? `/${value.slice(3)}` : value;
+        const asset = await fetch(new URL(normalized, server.url));
+        if (asset.status !== 200) throw new Error(`HTML asset failed: ${normalized} (${asset.status})`);
       }
+    }
+    if (path === "/manifest.webmanifest") {
+      const manifest = await response.clone().json() as { start_url?: string; scope?: string; display?: string; icons?: unknown[] };
+      if (manifest.start_url !== "/" || manifest.scope !== "/" || manifest.display !== "standalone" || !Array.isArray(manifest.icons) || manifest.icons.length < 2) throw new Error("PWA manifest contract is incomplete");
+    }
+    if (path === "/sw.js") {
+      const source = await response.clone().text();
+      if (!source.includes("jigeumta-shell-v18") || !source.includes("manifest.webmanifest")) throw new Error("Service worker shell cache contract is stale");
     }
   }
   for (const path of ["/.env", "/.env.local", "/%2e%2e/.env", "/%2e%2e%5c.env", "/engine.py"]) {
@@ -34,7 +61,7 @@ try {
       if (response.status !== 404 || (await response.text()) !== "") throw new Error(`Secret/source path exposed: ${method} ${path}`);
     }
   }
-  console.log("AOT HTTP asset/API contract verified");
+  console.log("AOT HTTP, Vercel runtime-data, and PWA contracts verified");
 } finally {
   server.stop(true);
 }

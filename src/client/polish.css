@@ -1,0 +1,60 @@
+/* Small interaction corrections layered after the upstream-aligned styles. */
+html[data-theme="light"]{--action:#3e6f9f;--action-hover:#315f8d;--action-soft:#eef4fa}
+html[data-theme="dark"]{--action:#5d88b7;--action-hover:#6b96c5;--action-soft:#1b2a39}
+.primary-button,.search-button{background:var(--action);box-shadow:none}.primary-button:hover,.search-button:hover{background:var(--action-hover);filter:none}
+.time-strip .selected-time{background:var(--action);border-color:var(--action);color:#fff}.time-strip .selected-time:hover{background:var(--action-hover);filter:none}
+.time-picker{position:relative;display:flex;align-items:center;justify-content:center;border-radius:10px;min-width:118px;min-height:42px;font-size:16px;font-weight:900;letter-spacing:-.2px;overflow:hidden}.time-picker>span{pointer-events:none}.time-picker>input{position:absolute;inset:0;width:100%;height:100%;margin:0;padding:0;border:0;opacity:0;cursor:pointer}
+.settings-panel .checkbox-label{min-height:44px;margin-top:0;align-self:end;padding:0 3px}.settings-panel .checkbox-label input{min-height:0}
+.bottom-actions{display:grid;grid-template-columns:auto auto minmax(12px,1fr) auto;align-items:center;gap:8px;padding:4px 1px}.bottom-actions button{display:inline-flex;align-items:center;justify-content:center;gap:7px;min-height:40px;white-space:nowrap}.bottom-actions .share-icon{width:16px;height:16px;flex:0 0 16px;fill:none;stroke:currentColor;stroke-width:1.8}.bottom-actions .favorite-save{border-color:#cbd9e6;background:var(--action-soft);color:var(--action)}.bottom-actions .refresh-route{justify-self:end}
+html[data-theme="dark"] .time-strip .selected-time{background:var(--action);border-color:var(--action);color:#fff}
+
+/* Keep the mobile hierarchy stable down to 320px instead of reflowing core controls into ad-hoc columns. */
+@media(max-width:620px){
+  .app-header{display:block;position:relative;margin-bottom:14px}
+  .brand{display:inline-flex;align-items:center;gap:8px;max-width:calc(100% - 106px);white-space:nowrap;font-size:20px;line-height:1}
+  .brand img{width:44px;height:44px;flex:0 0 44px}
+  .brand>span{display:inline;white-space:nowrap}
+  .header-actions{display:flex;width:100%;max-width:none;margin-top:10px;gap:6px;flex-wrap:nowrap;justify-content:stretch;align-items:stretch}
+  .service-status{position:absolute;top:5px;right:0;width:auto;max-width:102px;text-align:right;white-space:nowrap;font-size:12px;line-height:1.2}
+  .header-button{display:inline-flex;flex:1 1 0;min-width:0;min-height:38px;justify-content:center;padding:8px 5px;font-size:11px;line-height:1.1;white-space:nowrap}
+  .header-button svg{width:14px;height:14px;flex:0 0 14px}
+  .theme-toggle{min-width:0}
+
+  .search-panel{display:grid;grid-template-columns:minmax(0,1fr);grid-template-areas:"from" "swap" "to" "submit";gap:0;align-items:stretch}
+  .station-control:first-child{grid-area:from;grid-column:auto!important;grid-row:auto!important}
+  .station-control:nth-of-type(2){grid-area:to;grid-column:auto!important;grid-row:auto!important}
+  .swap-button{grid-area:swap;grid-column:auto!important;grid-row:auto!important;position:relative;z-index:2;justify-self:center;width:34px;height:34px;margin:3px 0;padding:0;border:1px solid var(--line);border-radius:50%;background:var(--surface);color:var(--muted);font-size:0;line-height:1;transform:none!important;box-shadow:0 4px 12px rgba(20,32,48,.09)}
+  .swap-button::before{content:"⇅";display:block;font-size:18px;font-weight:800;line-height:1;color:currentColor}
+  .swap-button:hover{background:var(--surface2);border-color:#9eb8dc;color:var(--text)}
+  .search-button{grid-area:submit;grid-column:auto!important;grid-row:auto!important;width:100%;height:44px;margin-top:10px}
+
+  .time-strip{display:grid;grid-template-columns:36px 42px 42px 76px 42px 42px;gap:4px;justify-content:space-between;align-items:stretch;overflow-x:auto;overscroll-behavior-inline:contain;scrollbar-width:none}
+  .time-strip::-webkit-scrollbar{display:none}
+  .time-step-group{display:contents}
+  .time-strip>button:first-child,.time-strip .selected-time,.time-picker{grid-column:auto!important;grid-row:auto!important;height:40px!important;min-height:40px;min-width:0!important;width:auto!important}
+  .time-strip button{height:40px;min-width:0;padding:0 3px;border-radius:9px;font-size:11px;line-height:1;white-space:nowrap}
+  .time-strip .selected-time{padding:0 3px;font-size:12px;line-height:1;white-space:nowrap}
+
+  .bottom-actions{grid-template-columns:1fr 1fr}.bottom-actions .tool-spacer{display:none}.bottom-actions .refresh-route{grid-column:1/-1;justify-self:stretch}.bottom-actions button{width:100%}
+}
+
+@media(max-width:360px){
+  .app-shell{padding-left:8px;padding-right:8px}
+  .brand{max-width:calc(100% - 94px);gap:6px;font-size:18px}
+  .brand img{width:40px;height:40px;flex-basis:40px}
+  .service-status{top:4px;max-width:90px;font-size:10.5px}
+  .header-actions{gap:4px;margin-top:8px}
+  .header-button{min-height:36px;padding:7px 3px;font-size:10.5px;gap:4px}
+  .header-button svg{width:13px;height:13px;flex-basis:13px}
+  .search-card{padding:12px}
+  .input-wrap input{font-size:14px}
+  .time-strip{grid-template-columns:34px 37px 37px 68px 37px 37px;gap:4px;justify-content:start}
+  .time-strip button{padding:0 2px;font-size:10px}
+  .time-strip .selected-time{padding:0 2px;font-size:11px}
+}
+
+@media(max-width:330px){
+  .time-strip{grid-template-columns:32px 36px 36px 64px 36px 36px;gap:3px}
+  .time-strip button{font-size:9.5px}
+  .time-strip .selected-time{font-size:10.5px}
+}

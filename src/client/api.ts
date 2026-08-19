@@ -19,6 +19,15 @@ export interface ApiClientOptions {
 
 export type FetchImplementation = (input: RequestInfo | URL, init?: RequestInit) => Promise<Response>;
 
+function publicErrorMessage(payload: ApiEnvelope, fallback: string): string {
+  const base = payload.error || fallback;
+  const errorId = typeof payload.error_id === "string" ? payload.error_id : "";
+  const requestId = typeof payload.request_id === "string" ? payload.request_id : "";
+  if (errorId) return `${base} · 오류 ID ${errorId}`;
+  if (requestId) return `${base} · 요청 ID ${requestId}`;
+  return base;
+}
+
 export class ApiClient {
   private readonly fetchImpl: FetchImplementation;
   private readonly defaultTimeoutMs: number;
@@ -34,11 +43,18 @@ export class ApiClient {
   }
 
   async post<T extends ApiEnvelope>(url: string, body: unknown, timeoutMs = this.defaultTimeoutMs): Promise<T> {
-    return this.request<T>(url, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body), cache: "no-store" }, timeoutMs);
+    return this.request<T>(url, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(this.withJourneyDebug(url, body)), cache: "no-store" }, timeoutMs);
   }
 
   async delete<T extends ApiEnvelope>(url: string, body: unknown, timeoutMs = this.defaultTimeoutMs): Promise<T> {
     return this.request<T>(url, { method: "DELETE", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body), cache: "no-store" }, timeoutMs);
+  }
+
+  private withJourneyDebug(url: string, body: unknown): unknown {
+    if (!["/api/route", "/api/auto_route", "/api/trip_update"].includes(url)) return body;
+    if (typeof window === "undefined" || localStorage.getItem("jigeumta_debug_query") !== "1") return body;
+    if (!body || typeof body !== "object" || Array.isArray(body)) return body;
+    return { ...(body as Record<string, unknown>), debug_mode: true };
   }
 
   private async request<T extends ApiEnvelope>(url: string, init: RequestInit, timeoutMs: number): Promise<T> {
@@ -50,7 +66,7 @@ export class ApiClient {
       let payload: ApiEnvelope;
       try { payload = JSON.parse(text) as ApiEnvelope; }
       catch { throw new ApiError(`서버 응답 오류 (${response.status})`, response.status); }
-      if (!response.ok || payload.ok !== true) throw new ApiError(payload.error || "요청 실패", response.status, payload);
+      if (!response.ok || payload.ok !== true) throw new ApiError(publicErrorMessage(payload, "요청 실패"), response.status, payload);
       return payload as T;
     } catch (error: unknown) {
       if (error instanceof DOMException && error.name === "AbortError") throw new ApiError("조회가 20초를 초과했습니다. 잠시 후 다시 시도해 주세요.");

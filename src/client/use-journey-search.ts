@@ -8,6 +8,7 @@ import { addMinutesToDateTime, experimentsToCsv, experimentsToJson, localDateTim
 import { isRecord, readStorage, STORAGE_KEYS, writeStorage } from "./storage";
 
 export type SuggestionSide = "from" | "to";
+export interface JourneySearchOptions { excludeGtx?: boolean; }
 
 export interface JourneySearchController {
   from: string;
@@ -36,7 +37,7 @@ export interface JourneySearchController {
   suggestionIndex: number;
   setSuggestionIndex: Dispatch<SetStateAction<number>>;
   suggestions: string[];
-  search(event?: FormEvent, offsetOverride?: number): Promise<boolean>;
+  search(event?: FormEvent, offsetOverride?: number, options?: JourneySearchOptions): Promise<boolean>;
   swap(): void;
   adjustTime(minutes: number): void;
   selectSuggestion(name: string): void;
@@ -130,19 +131,20 @@ export function useJourneySearch(notify: (message: string) => void): JourneySear
     if (from.trim() && to.trim()) trackOnce("station_set", "session", { from: from.trim(), to: to.trim() });
   }, [from, to]);
 
-  const search = async (event?: FormEvent, offsetOverride?: number): Promise<boolean> => {
+  const search = async (event?: FormEvent, offsetOverride?: number, options?: JourneySearchOptions): Promise<boolean> => {
     event?.preventDefault();
     if (!from.trim() || !to.trim()) { notify("출발역과 도착역을 입력하세요."); track("route_search_invalid"); return false; }
+    const excludeGtx = Boolean(options?.excludeGtx);
     setLoading(true);
     setError("");
-    track("route_search", { from, to });
+    track("route_search", { from, to, exclude_gtx: excludeGtx });
     trackOnce("station_set", "session", { from: from.trim(), to: to.trim() });
     const start = exactTimeValue ? new Date(`${localDateTimeString(new Date()).slice(0, 10)}T${exactTimeValue}:00`) : new Date(Date.now() + (offsetOverride ?? searchMinutes) * 60_000);
     const inputSegments: RouteSegmentInput[] = [{ line: "", from: from.trim(), to: to.trim(), transfer_walk: 0, transfer_seconds: 0 }];
     try {
-      const next = await apiClient.autoRoute({ from: from.trim(), to: to.trim(), start_time: localDateTimeString(start), baseline_minutes: baseline || null, day });
+      const next = await apiClient.autoRoute({ from: from.trim(), to: to.trim(), start_time: localDateTimeString(start), baseline_minutes: baseline || null, day, exclude_gtx: excludeGtx });
       setResult(next);
-      track("route_search_success", { transfer_count: next.transfer_count ?? -1 });
+      track("route_search_success", { transfer_count: next.transfer_count ?? -1, exclude_gtx: excludeGtx });
       if (experimentEnabled) {
         const all = readStorage(localStorage, STORAGE_KEYS.experiments, [], isExperimentArray);
         const activeId = localStorage.getItem(STORAGE_KEYS.activeExperiment);
@@ -157,14 +159,14 @@ export function useJourneySearch(notify: (message: string) => void): JourneySear
     } catch (caught: unknown) {
       const message = caught instanceof ApiError ? caught.message : caught instanceof Error ? caught.message : "조회에 실패했습니다.";
       setError(message);
-      track("route_search_error", { reason: message.slice(0, 100) });
+      track("route_search_error", { reason: message.slice(0, 100), exclude_gtx: excludeGtx });
       return false;
     } finally { setLoading(false); }
   };
 
   const swap = (): void => { setFrom(to); setTo(from); };
   const adjustTime = (minutes: number): void => { setExactTimeValue(""); setSearchMinutes(minutes); trackOnce("time_adjust", "session", { offset_minutes: minutes }); };
-  const setExactTime = (value: string): void => { setExactTimeValue(value); trackOnce("time_adjust", "session", { exact_time: value }); };
+  const setExactTime = (value: string): void => { setExactTimeValue(value); setSearchMinutes(0); trackOnce("time_adjust", "session", { exact_time: value }); };
   const toggleSettings = (): void => setShowSettings((value) => !value);
 
   const selectSuggestion = (name: string): void => {
