@@ -57,9 +57,11 @@ test("refresh lease uses SET NX EX and compare-delete release", async () => {
   expect(contended).toEqual({ configured: true, token: null });
   expect(commands[0].slice(-3)).toEqual(["NX", "EX", "5"]);
 
-  await cacheReleaseRefreshLease("realtime-source:1032", acquired.token!);
+  const token = acquired.token;
+  if (!token) throw new Error("expected refresh lease token");
+  await cacheReleaseRefreshLease("realtime-source:1032", token);
   expect(commands.at(-1)?.[0]).toBe("EVAL");
-  expect(commands.at(-1)?.at(-1)).toBe(acquired.token);
+  expect(commands.at(-1)?.at(-1)).toBe(token);
 });
 
 test("native Valkey URL accepts TLS Redis/Valkey schemes and rejects HTTP", () => {
