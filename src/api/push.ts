@@ -1,3 +1,7 @@
+import { configureNativePushStorage, resetNativePushStorageStateForTests } from "./push/configure-storage";
+
+configureNativePushStorage();
+
 export * from "./push/contracts";
 export {
   pushAlertStore,
@@ -16,6 +20,7 @@ export {
   handlePushTest,
 } from "./push/handlers";
 export { handlePushDispatch } from "./push/dispatch";
+export { configureNativePushStorage } from "./push/configure-storage";
 
 import { resetPushDeliveryStateForTests } from "./push/delivery";
 import { resetPushDispatchStateForTests } from "./push/dispatch";
@@ -26,5 +31,6 @@ export const resetPushRuntimeStateForTests = (): void => {
   resetPushDeliveryStateForTests();
   resetPushDispatchStateForTests();
   resetPushStoreHelpersForTests();
+  resetNativePushStorageStateForTests();
   resetPushStoreStateForTests();
 };
