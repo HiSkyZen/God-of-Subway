@@ -8,6 +8,7 @@ import {
 } from "../../src/infra/cache";
 import {
   configuredValkeyUrl,
+  nativeValkeyClientOptions,
   resetValkeyRuntimeForTests,
   setValkeyTransportForTests,
 } from "../../src/infra/valkey";
@@ -115,4 +116,8 @@ test("native Valkey URL accepts TLS Redis/Valkey schemes and rejects HTTP", () =
   Bun.env.VALKEY_URL = "";
   Bun.env.REDIS_URL = "valkey://cache.internal:6379";
   expect(configuredValkeyUrl()).toBe("valkey://cache.internal:6379");
+});
+
+test("native Valkey queues cold-start commands while TLS and authentication connect", () => {
+  expect(nativeValkeyClientOptions.enableOfflineQueue).toBe(true);
 });
