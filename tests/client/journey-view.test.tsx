@@ -1,7 +1,7 @@
 import { expect, test } from "bun:test";
 import { renderToStaticMarkup } from "react-dom/server";
 import { UpstreamJourneyView } from "../../src/client/journey-view";
-import type { AutoRouteResponse, RouteSegment } from "../../src/client/contract";
+import type { AutoRouteResponse, LiveTripState, RouteSegment } from "../../src/client/contract";
 
 const segments: RouteSegment[] = [
   {
@@ -40,6 +40,11 @@ const result: AutoRouteResponse = {
   segments,
 };
 
+function localText(value: Date): string {
+  const pad = (item: number): string => String(item).padStart(2, "0");
+  return `${value.getFullYear()}-${pad(value.getMonth() + 1)}-${pad(value.getDate())} ${pad(value.getHours())}:${pad(value.getMinutes())}:${pad(value.getSeconds())}`;
+}
+
 test("journey timeline renders useful transfer details without direction noise", () => {
   const html = renderToStaticMarkup(<UpstreamJourneyView result={result} segments={segments} arrivalTime={result.arrival_time} totalSeconds={1620} activeIndex={0} liveTrip={null} onBoard={() => undefined} onRefresh={() => undefined} onExcludeGtx={() => undefined} />);
   expect(html).toContain("합정");
@@ -56,8 +61,44 @@ test("journey timeline renders useful transfer details without direction noise",
   expect(html).toContain("최종 목적지");
 });
 
+test("active transfer has a live countdown and visual progress state", () => {
+  const transferSegments: RouteSegment[] = segments.map((segment) => ({ ...segment }));
+  transferSegments[0].location_label = "마포-공덕";
+  const trip: LiveTripState = {
+    activeIndex: 0,
+    phase: "transfer",
+    boardedTrainNo: "6123",
+    boardedAt: localText(new Date(Date.now() - 12 * 60_000)),
+    trackingStartedAt: localText(new Date(Date.now() - 12 * 60_000)),
+    platformStart: null,
+    segments: transferSegments.map(({ line, from, to, transfer_seconds, transfer_walk, transfer_info }) => ({ line, from, to, transfer_seconds, transfer_walk, transfer_info })),
+    day: "DAY",
+    baseline: null,
+    previousNextTrain: null,
+    displaySegments: transferSegments,
+    transferEndsAt: localText(new Date(Date.now() + 90_000)),
+    journeyStartedAt: localText(new Date(Date.now() - 15 * 60_000)),
+  };
+  const html = renderToStaticMarkup(<UpstreamJourneyView result={{ ...result, segments: transferSegments }} segments={transferSegments} arrivalTime={result.arrival_time} totalSeconds={1620} activeIndex={0} liveTrip={trip} onBoard={() => undefined} onRefresh={() => undefined} onExcludeGtx={() => undefined} />);
+  expect(html).toContain("하차 · 환승 중");
+  expect(html).toContain("환승 중 ·");
+  expect(html).toContain("남음");
+  expect(html).toContain('role="progressbar"');
+  expect(html).toContain("active-transfer");
+  expect(html).toContain("마포-공덕");
+});
+
+test("position labels preserve source state and negative delay never renders as early running", () => {
+  const liveSegments: RouteSegment[] = [{ ...segments[0], location_label: "합정 출발", delay_seconds: -180 }];
+  const liveResult: AutoRouteResponse = { ok: true, from: "합정", to: "공덕", arrival_time: liveSegments[0].alight_dt || "", segments: liveSegments };
+  const html = renderToStaticMarkup(<UpstreamJourneyView result={liveResult} segments={liveSegments} arrivalTime={liveResult.arrival_time} totalSeconds={600} activeIndex={0} liveTrip={null} onBoard={() => undefined} onRefresh={() => undefined} onExcludeGtx={() => undefined} />);
+  expect(html).toContain("합정 출발");
+  expect(html).toContain("정시권");
+  expect(html).not.toContain("−3분");
+});
+
 test("GTX route exposes a one-click exclusion rerun when an ordinary route is possible", () => {
-  const gtx: RouteSegment[] = [{ line: "GTX-A(북부)", from: "연신내", to: "서울역", train_no: "X1009", tracking_id: "1009", board_dt: "2026-08-18 23:45:00", alight_dt: "2026-08-18 23:51:00" }];
+  const gtx: RouteSegment[] = [{ line: "GTX-A(북부)", from: "연신내", to: "서울역", train_no: "X1009", tracking_id: "X1009", board_dt: "2026-08-18 23:45:00", alight_dt: "2026-08-18 23:51:00" }];
   const gtxResult: AutoRouteResponse = { ok: true, from: "연신내", to: "서울역", arrival_time: "2026-08-18 23:51:00", segments: gtx };
   const html = renderToStaticMarkup(<UpstreamJourneyView result={gtxResult} segments={gtx} arrivalTime={gtxResult.arrival_time} totalSeconds={360} activeIndex={0} liveTrip={null} onBoard={() => undefined} onRefresh={() => undefined} onExcludeGtx={() => undefined} />);
   expect(html).toContain("GTX-A 제외하기");
@@ -66,7 +107,7 @@ test("GTX route exposes a one-click exclusion rerun when an ordinary route is po
 test("GTX-exclusive endpoints never offer an impossible GTX exclusion", () => {
   for (const station of ["운정중앙", "킨텍스", "동탄"]) {
     const north = station !== "동탄";
-    const gtx: RouteSegment[] = [{ line: north ? "GTX-A(북부)" : "GTX-A(남부)", from: station, to: north ? "서울역" : "수서", train_no: "X1011", tracking_id: "1011", board_dt: "2026-08-18 23:45:00", alight_dt: "2026-08-18 23:57:00" }];
+    const gtx: RouteSegment[] = [{ line: north ? "GTX-A(북부)" : "GTX-A(남부)", from: station, to: north ? "서울역" : "수서", train_no: north ? "X1001" : "X0002", tracking_id: north ? "X1001" : "X0002", board_dt: "2026-08-18 23:45:00", alight_dt: "2026-08-18 23:57:00" }];
     const gtxResult: AutoRouteResponse = { ok: true, from: station, to: north ? "서울역" : "수서", arrival_time: "2026-08-18 23:57:00", segments: gtx };
     const html = renderToStaticMarkup(<UpstreamJourneyView result={gtxResult} segments={gtx} arrivalTime={gtxResult.arrival_time} totalSeconds={720} activeIndex={0} liveTrip={null} onBoard={() => undefined} onRefresh={() => undefined} onExcludeGtx={() => undefined} />);
     expect(html).not.toContain("GTX-A 제외하기");
