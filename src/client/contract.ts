@@ -22,6 +22,7 @@ export interface RouteSegmentInput {
 export interface RouteSegment extends RouteSegmentInput {
   index?: number;
   train_no?: string | number;
+  tracking_id?: string | number;
   origin?: string;
   destination?: string;
   service?: string;
@@ -33,7 +34,10 @@ export interface RouteSegment extends RouteSegmentInput {
   current_station?: string;
   current_station_name?: string;
   direction?: string;
+  status?: string;
   location?: string;
+  location_label?: string;
+  location_kind?: string;
   nearby_candidates?: RouteSegment[];
   previous_candidate?: RouteSegment | null;
   transfer_info?: TransferInfo | null;
