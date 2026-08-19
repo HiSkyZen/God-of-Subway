@@ -17,10 +17,34 @@ const OFFSETS: Record<GtxLine, { forward: number[]; reverse: number[] }> = {
   },
 };
 
-const TERMINAL_TIMES: Record<GtxLine, { forward: string[]; reverse: string[] }> = {
+type GtxScheduleMode = "DAY" | "SAT" | "END";
+type TerminalTimes = Record<GtxLine, { forward: string[]; reverse: string[] }>;
+
+const WEEKDAY_TERMINAL_TIMES: TerminalTimes = {
   "GTX-A(북부)": { forward: NORTH_TO_SEOUL, reverse: NORTH_TO_UNJEONG },
   "GTX-A(남부)": { forward: SOUTH_TO_DONGTAN, reverse: SOUTH_TO_SUSEO },
 };
+
+// The published GTX-A export currently labels Saturday/Sunday/holiday service together as "주말".
+// Keep separate service-mode entries so a distinct table can be dropped in without changing routing semantics.
+const SATURDAY_TERMINAL_TIMES: TerminalTimes = {
+  "GTX-A(북부)": { forward: [...NORTH_TO_SEOUL], reverse: [...NORTH_TO_UNJEONG] },
+  "GTX-A(남부)": { forward: [...SOUTH_TO_DONGTAN], reverse: [...SOUTH_TO_SUSEO] },
+};
+const HOLIDAY_TERMINAL_TIMES: TerminalTimes = {
+  "GTX-A(북부)": { forward: [...NORTH_TO_SEOUL], reverse: [...NORTH_TO_UNJEONG] },
+  "GTX-A(남부)": { forward: [...SOUTH_TO_DONGTAN], reverse: [...SOUTH_TO_SUSEO] },
+};
+
+const TERMINAL_TIMES_BY_MODE: Record<GtxScheduleMode, TerminalTimes> = {
+  DAY: WEEKDAY_TERMINAL_TIMES,
+  SAT: SATURDAY_TERMINAL_TIMES,
+  END: HOLIDAY_TERMINAL_TIMES,
+};
+
+function scheduleMode(value: string): GtxScheduleMode {
+  return value === "SAT" ? "SAT" : value === "END" ? "END" : "DAY";
+}
 
 function clockSeconds(value: string): number {
   const [h, m] = value.split(":").map(Number);
@@ -34,8 +58,14 @@ function serviceOccurrence(start: Date, clock: string, stationOffset: number): D
   return new Date(serviceBase.getTime() + (seconds + afterMidnight) * 1000);
 }
 
+export function scheduledGtxTrainNumber(line: GtxLine, forward: boolean, index: number): string {
+  const base = line === "GTX-A(북부)" ? 1000 : 0;
+  const sequence = base + (forward ? 1 : 2) + index * 2;
+  return `X${String(sequence).padStart(4, "0")}`;
+}
+
 export interface GtxScheduledCandidate {
-  /** Internal schedule identity only; never a public GTX-A service number. */
+  /** Public GTX-A service train number from the published timetable sequence. */
   trainNo: string;
   board: Date;
   alight: Date;
@@ -43,7 +73,7 @@ export interface GtxScheduledCandidate {
   scheduled: true;
 }
 
-export function scheduledGtxCandidates(line: GtxLine, from: string, to: string, start: Date, maxWaitSeconds = 3600): GtxScheduledCandidate[] {
+export function scheduledGtxCandidates(line: GtxLine, from: string, to: string, start: Date, mode = "DAY", maxWaitSeconds = 3600): GtxScheduledCandidate[] {
   const cfg = GTX_LINES[line];
   const fromName = canonStation(from);
   const toName = canonStation(to);
@@ -52,7 +82,8 @@ export function scheduledGtxCandidates(line: GtxLine, from: string, to: string, 
   if (fi < 0 || ti < 0 || fi === ti) return [];
   const forward = fi < ti;
   const wanted: 1 | -1 = forward ? 1 : -1;
-  const times = forward ? TERMINAL_TIMES[line].forward : TERMINAL_TIMES[line].reverse;
+  const terminalTimes = TERMINAL_TIMES_BY_MODE[scheduleMode(mode)][line];
+  const times = forward ? terminalTimes.forward : terminalTimes.reverse;
   const offsets = forward ? OFFSETS[line].forward : OFFSETS[line].reverse;
   const boardOffset = offsets[fi];
   const alightOffset = offsets[ti];
@@ -63,7 +94,7 @@ export function scheduledGtxCandidates(line: GtxLine, from: string, to: string, 
     const wait = (board.getTime() - start.getTime()) / 1000;
     if (wait < -5 || wait > maxWaitSeconds) return;
     out.push({
-      trainNo: `GTX-SCHED-${line === "GTX-A(북부)" ? "N" : "S"}-${forward ? "F" : "R"}-${String(index + 1).padStart(3, "0")}`,
+      trainNo: scheduledGtxTrainNumber(line, forward, index),
       board,
       alight: new Date(board.getTime() + rideSeconds * 1000),
       wanted,
