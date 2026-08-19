@@ -1,5 +1,5 @@
 import type { AutoRoutePayload, CalculateRoutePayload, LiveTripPayload, PositionRow, SegmentInput, Serialized } from "../types/domain";
-import { fetchPosition, positionRows, type FetchLike } from "./realtime-service";
+import { fetchPosition, formatGtxTrainNumber, positionRows, type FetchLike } from "./realtime-service";
 import { autoCandidateRoutes, candidateInterchanges, routeConfidence } from "./routing-service";
 import { scheduledGtxCandidates } from "./gtx-schedule";
 import { GTX_LINES, GTX_LINE_NAMES, gtxDirection, gtxDuration, gtxLineForPair, gtxLineForStation, gtxSecondsBetween, isGtxLine, type GtxLine } from "./gtx-topology";
@@ -21,6 +21,7 @@ interface GtxCandidate {
   trainNo: string;
   wanted: 1 | -1;
   live: boolean;
+  locationLabel?: string;
   row?: PositionRow;
 }
 
@@ -47,6 +48,30 @@ function candidateLine(line: GtxLine, from: string, to: string): { fromName: str
   return { fromName, toName, fi, ti, wanted: fi < ti ? 1 : -1 };
 }
 
+function gtxLocationLabel(line: GtxLine, current: string, wanted: 1 | -1, rawStatus: unknown): string {
+  if (!current) return "위치 확인 중";
+  const status = String(rawStatus ?? "").trim();
+  if (status === "1") return `${current} 도착`;
+  if (status === "2") return `${current} 출발`;
+  if (status === "0" || status === "3") {
+    const stations = GTX_LINES[line].stations;
+    const ci = stations.indexOf(current as never);
+    if (ci < 0) return current;
+    const previousIndex = wanted === 1 ? ci - 1 : ci + 1;
+    const previous = previousIndex >= 0 && previousIndex < stations.length ? stations[previousIndex] : "";
+    return previous ? `${previous}-${current}` : `${current} 진입`;
+  }
+  return current;
+}
+
+function gtxStatusSummary(rawStatus: unknown, current: string): string {
+  const status = String(rawStatus ?? "").trim();
+  if (status === "1") return "도착";
+  if (status === "2") return "출발";
+  if (status === "0" || status === "3") return "운행 중";
+  return current ? "운행 중" : "시간표 진행 중";
+}
+
 function publicGtxCandidate(line: GtxLine, candidate: GtxCandidate, from: string, to: string, ready: Date, selected = false): Record<string, unknown> {
   const cfg = GTX_LINES[line];
   return {
@@ -54,6 +79,7 @@ function publicGtxCandidate(line: GtxLine, candidate: GtxCandidate, from: string
     from,
     to,
     train_no: candidate.trainNo,
+    tracking_id: candidate.trainNo,
     origin: candidate.wanted === 1 ? cfg.stations[0] : cfg.stations.at(-1),
     destination: candidate.wanted === 1 ? cfg.stations.at(-1) : cfg.stations[0],
     service: "express",
@@ -66,9 +92,9 @@ function publicGtxCandidate(line: GtxLine, candidate: GtxCandidate, from: string
     current_station: candidate.current,
     current_station_name: candidate.current,
     location_kind: candidate.live ? "live" : "expected",
-    location_label: candidate.live && candidate.current ? `${candidate.current} 실시간` : "GTX-A 시간표",
+    location_label: candidate.locationLabel || (candidate.live && candidate.current ? candidate.current : "시간표 위치 계산 중"),
     confidence: candidate.live ? "높음" : "중간",
-    method: candidate.live ? "GTX-A 실시간 열차 위치 + 구간 주행시간" : "GTX-A 시간표 + 구간 주행시간",
+    method: candidate.live ? "GTX-A 실시간 위치 + 공개 시간표 열번" : "GTX-A 공개 시간표 열번",
     projected: !candidate.live,
     live_detected: candidate.live,
     selected,
@@ -90,28 +116,29 @@ function realtimeGtxCandidates(line: GtxLine, from: string, to: string, start: D
     const wait = (board.getTime() - start.getTime()) / 1000;
     if (wait < -5 || wait > MAX_BOARD_WAIT_SECONDS) continue;
     const alight = new Date(board.getTime() + gtxDuration(line, fromName, toName) * 1000);
-    const trainNo = String(row.trainNo ?? row.btrainNo ?? "").trim();
+    const trainNo = formatGtxTrainNumber(row.trainNo ?? row.btrainNo);
     if (!trainNo) continue;
-    out.push({ board, alight, row, current, trainNo, wanted, live: true });
+    out.push({ board, alight, row, current, trainNo, wanted, live: true, locationLabel: gtxLocationLabel(line, current, wanted, row.trainSttus) });
   }
   return out.sort((a, b) => a.alight.getTime() - b.alight.getTime() || a.board.getTime() - b.board.getTime());
 }
 
-function timetableGtxCandidates(line: GtxLine, from: string, to: string, start: Date): GtxCandidate[] {
-  return scheduledGtxCandidates(line, from, to, start, MAX_BOARD_WAIT_SECONDS).map((candidate) => ({
+function timetableGtxCandidates(line: GtxLine, from: string, to: string, start: Date, mode: string): GtxCandidate[] {
+  return scheduledGtxCandidates(line, from, to, start, mode, MAX_BOARD_WAIT_SECONDS).map((candidate) => ({
     board: candidate.board,
     alight: candidate.alight,
     current: "",
     trainNo: candidate.trainNo,
     wanted: candidate.wanted,
     live: false,
+    locationLabel: "시간표 위치 계산 중",
   }));
 }
 
 function mergeGtxCandidates(live: GtxCandidate[], timetable: GtxCandidate[]): GtxCandidate[] {
   const merged = [...live];
   for (const scheduled of timetable) {
-    if (live.some((candidate) => Math.abs(candidate.board.getTime() - scheduled.board.getTime()) <= 120_000)) continue;
+    if (live.some((candidate) => candidate.trainNo === scheduled.trainNo || Math.abs(candidate.board.getTime() - scheduled.board.getTime()) <= 120_000)) continue;
     merged.push(scheduled);
   }
   return merged.sort((a, b) => a.alight.getTime() - b.alight.getTime() || Number(b.live) - Number(a.live) || a.board.getTime() - b.board.getTime()).slice(0, 10);
@@ -119,7 +146,8 @@ function mergeGtxCandidates(live: GtxCandidate[], timetable: GtxCandidate[]): Gt
 
 async function direct(line: GtxLine, from: string, to: string, start: Date, mode: string, fetchImpl: FetchLike): Promise<Serialized> {
   const { fromName, toName } = candidateLine(line, from, to);
-  const timetable = timetableGtxCandidates(line, fromName, toName, start);
+  const [resolvedMode, reason] = resolveServiceMode(mode, start);
+  const timetable = timetableGtxCandidates(line, fromName, toName, start, resolvedMode);
   let rows: PositionRow[] = [];
   let realtimeAvailable = false;
   let realtimeQuery = "";
@@ -144,7 +172,6 @@ async function direct(line: GtxLine, from: string, to: string, start: Date, mode
     };
   }
   const selected = candidates[0];
-  const [resolvedMode, reason] = resolveServiceMode(mode, start);
   const ride = Math.round((selected.alight.getTime() - selected.board.getTime()) / 1000);
   const total = Math.round((selected.alight.getTime() - start.getTime()) / 1000);
   const segment = {
@@ -171,7 +198,7 @@ async function direct(line: GtxLine, from: string, to: string, start: Date, mode
     segments: [segment],
     positions: rows.length,
     matched: live.length,
-    warnings: realtimeAvailable || live.length ? [] : ["GTX-A 실시간 위치를 사용하지 못해 시간표 기준으로 계산했습니다."],
+    warnings: realtimeAvailable || live.length ? [] : ["GTX-A 실시간 위치를 사용하지 못해 공개 시간표 기준으로 계산했습니다."],
   };
 }
 
@@ -202,7 +229,7 @@ export async function calculateGtxTrip(payload: LiveTripPayload, fetchImpl: Fetc
   const segment = payload.segments[0];
   const line = segment.line as GtxLine;
   const { fromName, toName, ti, wanted } = candidateLine(line, String(segment.from), String(segment.to));
-  const trainNo = String(payload.boarded_train_no ?? "").trim();
+  const trainNo = formatGtxTrainNumber(payload.boarded_train_no);
   if (!trainNo) return { ok: false, error: "탑승한 GTX-A 열차번호가 없습니다." };
   let rows: PositionRow[] = [];
   try {
@@ -213,18 +240,22 @@ export async function calculateGtxTrip(payload: LiveTripPayload, fetchImpl: Fetc
   }
   const now = nowKst();
   const live = rows
-    .filter((row) => String(row.trainNo ?? row.btrainNo ?? "").trim() === trainNo)
+    .filter((row) => formatGtxTrainNumber(row.trainNo ?? row.btrainNo) === trainNo)
     .sort((a, b) => parseDt(b.recptnDt ?? b.lastRecptnDt).getTime() - parseDt(a.recptnDt ?? a.lastRecptnDt).getTime())[0];
   const totalRide = gtxDuration(line, fromName, toName);
   const boarded = payload.boarded_at ? parseDt(payload.boarded_at) : now;
   let remaining = Math.max(0, totalRide - Math.max(0, Math.round((now.getTime() - boarded.getTime()) / 1000)));
   let current = "";
+  let locationLabel = "시간표 위치 계산 중";
+  let currentStatus = "시간표 진행 중";
   let arrived = remaining <= 0;
   let projected = true;
-  let method = "GTX-A 시간표 · 탑승 후 경과시간 추적";
+  let method = "GTX-A 공개 시간표 · 탑승 후 경과시간 추적";
   if (live) {
     const cfg = GTX_LINES[line];
     current = canonStation(live.statnNm);
+    locationLabel = gtxLocationLabel(line, current, wanted, live.trainSttus);
+    currentStatus = gtxStatusSummary(live.trainSttus, current);
     const ci = cfg.stations.indexOf(current as never);
     const observed = parseDt(live.recptnDt ?? live.lastRecptnDt);
     const age = Math.max(0, (now.getTime() - observed.getTime()) / 1000);
@@ -234,16 +265,18 @@ export async function calculateGtxTrip(payload: LiveTripPayload, fetchImpl: Fetc
       remaining = passedTarget || atTarget ? 0 : Math.max(0, Math.round(gtxSecondsBetween(line, ci, ti) - age));
       arrived = passedTarget || (atTarget && remaining === 0);
       projected = false;
-      method = "GTX-A 탑승 열차 실시간 추적";
+      method = "GTX-A 탑승 열차 실시간 추적 + 공개 시간표 열번";
     }
   }
   const alight = new Date(now.getTime() + remaining * 1000);
+  const status = arrived ? "도착" : currentStatus;
   const resultSegment = {
     index: 0,
     line,
     from: fromName,
     to: toName,
     train_no: trainNo,
+    tracking_id: trainNo,
     origin: wanted === 1 ? GTX_LINES[line].stations[0] : GTX_LINES[line].stations.at(-1),
     destination: wanted === 1 ? GTX_LINES[line].stations.at(-1) : GTX_LINES[line].stations[0],
     service: "express",
@@ -256,7 +289,9 @@ export async function calculateGtxTrip(payload: LiveTripPayload, fetchImpl: Fetc
     delay_seconds: 0,
     current_station: current,
     current_station_name: current,
-    location: current || "시간표 진행 중",
+    location: locationLabel,
+    location_label: locationLabel,
+    status,
     confidence: projected ? "중간" : "높음",
     method,
     projected,
@@ -274,7 +309,7 @@ export async function calculateGtxTrip(payload: LiveTripPayload, fetchImpl: Fetc
     remaining_seconds: remaining,
     current_segment_remaining_seconds: remaining,
     current_station: current,
-    current_status: arrived ? "도착" : current ? "운행 중" : "시간표 진행 중",
+    current_status: status,
     segments: [resultSegment],
     warnings: [],
   };
@@ -360,7 +395,7 @@ export async function calculateGtxHybridAuto(payload: AutoRoutePayload, baseRout
     transfer_count: Math.max(0, selected.segments.length - 1),
     interchanges: candidateInterchanges(selected.segments),
     segments: selectedSegments,
-    selection_method: "통합 노선 그래프 + GTX-A 시간표 + 실시간 ETA",
+    selection_method: "통합 노선 그래프 + GTX-A 공개 열번 시간표 + 실시간 ETA",
     candidate_count: candidates.length,
     live_scored_count: scored.length,
     gtx_excluded: excludeGtx,
