@@ -1,0 +1,55 @@
+name: bounded-urban-rail-optimization
+
+on:
+  pull_request:
+    types: [opened, reopened, synchronize]
+
+permissions:
+  contents: write
+  pull-requests: read
+
+jobs:
+  mission:
+    if: github.event.pull_request.head.repo.full_name == github.repository && github.event.pull_request.head.ref == 'agent/transit-routing-overhaul'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: ${{ github.event.pull_request.head.ref }}
+          fetch-depth: 2
+      - name: Verify mission source identity
+        shell: bash
+        run: |
+          test "$(git rev-parse HEAD^)" = "d4d1791349c9a396957fe6cfb912d86cd568b1cd"
+          test "$(git log -1 --format=%s)" = "chore: run bounded urban rail optimization mission"
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version-file: .bun-version
+      - name: Apply bounded mission
+        run: python3 scripts/mission-urban-opt.py
+      - name: Install
+        run: bun install --frozen-lockfile
+      - name: Check
+        run: bun run check
+      - name: Verify five-second regression budget
+        run: bun test tests/engine/regression-routes.test.ts
+      - name: Build
+        run: bun run build:all
+      - name: Verify PWA
+        run: bun run verify:pwa
+      - name: Verify AOT
+        run: bun run verify:aot
+      - name: Inspect and publish durable result
+        shell: bash
+        run: |
+          git diff --check
+          test ! -e scripts/mission-urban-opt.py
+          test ! -e .github/workflows/mission-urban-opt.yml
+          git status --short
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A
+          git diff --cached --quiet && { echo "mission produced no changes"; exit 1; }
+          git commit -m "feat: add timetable urban rail and optimize routing"
+          git push origin "HEAD:${{ github.event.pull_request.head.ref }}"
