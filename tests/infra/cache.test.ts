@@ -63,11 +63,11 @@ test("refresh lease uses SET NX EX and compare-delete release", async () => {
 });
 
 test("native Valkey URL accepts TLS Redis/Valkey schemes and rejects HTTP", () => {
-  Bun.env.VALKEY_URL = "rediss://default:secret@cache.example:12345/0";
-  expect(configuredValkeyUrl()).toBe(Bun.env.VALKEY_URL);
+  Bun.env.VALKEY_URL = "rediss://cache.example:12345/0";
+  expect(configuredValkeyUrl()).toBe("rediss://cache.example:12345/0");
   Bun.env.VALKEY_URL = "https://cache.example";
   expect(configuredValkeyUrl()).toBeNull();
   Bun.env.VALKEY_URL = "";
   Bun.env.REDIS_URL = "valkey://cache.internal:6379";
-  expect(configuredValkeyUrl()).toBe(Bun.env.REDIS_URL);
+  expect(configuredValkeyUrl()).toBe("valkey://cache.internal:6379");
 });
