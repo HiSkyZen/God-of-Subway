@@ -78,11 +78,14 @@ describe("지금타 Bun engine", () => {
   });
 
   test("invalid delay uses the closest same-direction train ahead and behind average", () => {
-    const trains = routeTrains("3호선", "DAY", "종로3가", "고속터미널")
-      .filter((train) => train.stops.some((stop) => canonStation(stop.station) === "종로3가"))
-      .sort((a, b) => firstTimed(a) - firstTimed(b));
+    const all = routeTrains("3호선", "DAY", "종로3가", "고속터미널")
+      .filter((train) => train.stops.some((stop) => canonStation(stop.station) === "종로3가"));
+    const groups = new Map<string, Train[]>();
+    for (const train of all) groups.set(train.direction, [...(groups.get(train.direction) ?? []), train]);
+    const trains = [...groups.values()].sort((a, b) => b.length - a.length)[0]?.sort((a, b) => firstTimed(a) - firstTimed(b)) ?? [];
     expect(trains.length).toBeGreaterThan(3);
     const trio = trains.slice(0, 3);
+    expect(new Set(trio.map((train) => train.direction)).size).toBe(1);
     const rows = trio.map((train, index) => {
       const stop = train.stops.find((item) => canonStation(item.station) === "종로3가");
       const ref = stop?.dep ?? stop?.arr;
