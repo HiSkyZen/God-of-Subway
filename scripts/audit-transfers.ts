@@ -18,3 +18,5 @@ console.log(JSON.stringify({
   verification_backlog: 124,
   policy: "raw missing durations are modeled/fallback; physical-layout overrides are applied at runtime",
 }, null, 2));
+
+export {};
