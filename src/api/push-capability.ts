@@ -1,3 +1,4 @@
+import { valkeyConfigured } from "../infra/valkey";
 import { redisConfiguration } from "./push/config";
 
 export interface PushCapabilities {
@@ -44,6 +45,7 @@ export const vapidConfiguration = (): VapidConfiguration => {
 };
 
 const persistentStoreConfigured = (): boolean => Bun.env.NODE_ENV !== "production"
+  || valkeyConfigured()
   || redisConfiguration() !== null;
 const intervalConfigured = (): boolean => {
   if (Bun.env.VERCEL === "1") return false;
