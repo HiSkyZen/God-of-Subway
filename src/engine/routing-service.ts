@@ -2,6 +2,7 @@ import { repository } from "./data-repository";
 import { GTX_LINES, GTX_LINE_NAMES, isGtxLine } from "./gtx-topology";
 import { canonStation, nowKst, routePair, routeTrains, STATIONS_BY_LINE } from "./timetable-service";
 import { RAPID_SERVICE_LINES, supportsRapidLocalChange } from "./rapid-service";
+import { DISJOINT_HOMONYM_STATIONS, isDisjointHomonymTransfer } from "./station-identity";
 import {
   adjustedTransferSeconds,
   directionalTransferOverride,
@@ -18,19 +19,72 @@ const transfers = () => repository.data.transfers;
 export const DEFAULT_TRANSFER_SECONDS = Number(graph().meta?.default_transfer_seconds ?? 180);
 export const STATION_SELECTOR_SEPARATOR = "\u001f";
 
-const ROUTING_STATIONS_BY_LINE: Record<string, readonly string[]> = {
-  ...STATIONS_BY_LINE,
-  ...Object.fromEntries(Object.entries(GTX_LINES).map(([line, config]) => [line, config.stations])),
-};
+const routingStationSets = new Map<string, Set<string>>(
+  Object.entries(STATIONS_BY_LINE).map(([line, names]) => [line, new Set(names.map(canonStation))]),
+);
+for (const [line, config] of Object.entries(GTX_LINES)) {
+  const stations = routingStationSets.get(line) ?? new Set<string>();
+  for (const station of config.stations) stations.add(canonStation(station));
+  routingStationSets.set(line, stations);
+}
+for (const entry of DISJOINT_HOMONYM_STATIONS) {
+  for (const line of entry.lines) {
+    const stations = routingStationSets.get(line) ?? new Set<string>();
+    stations.add(canonStation(entry.station));
+    routingStationSets.set(line, stations);
+  }
+}
+const ROUTING_STATIONS_BY_LINE: Record<string, readonly string[]> = Object.fromEntries(
+  [...routingStationSets.entries()].map(([line, stations]) => [line, [...stations]]),
+);
 
 type Node = [string, string];
 interface AdjEdge { to: Node; weight: number; kind: PathEdge["kind"]; }
+interface QueueEntry { d: number; order: number; node: Node; }
 export interface RouteSearchOptions { excludeLines?: readonly string[]; }
 interface StationSelector { station: string; line: string; }
 const adjacencyCache = new Map<string, Map<string, AdjEdge[]>>();
 const serviceCache = new Map<string, boolean>();
 const nodeKey = (n: Node): string => `${n[0]}\u0000${n[1]}`;
 const excludedSet = (options?: RouteSearchOptions): Set<string> => new Set(options?.excludeLines ?? []);
+const queueLess = (a: QueueEntry, b: QueueEntry): boolean => a.d < b.d || (a.d === b.d && a.order < b.order);
+
+class MinQueue {
+  private readonly items: QueueEntry[] = [];
+  get length(): number { return this.items.length; }
+  push(value: QueueEntry): void {
+    const items = this.items;
+    items.push(value);
+    let index = items.length - 1;
+    while (index > 0) {
+      const parent = (index - 1) >> 1;
+      if (!queueLess(items[index], items[parent])) break;
+      [items[index], items[parent]] = [items[parent], items[index]];
+      index = parent;
+    }
+  }
+  shift(): QueueEntry | undefined {
+    const items = this.items;
+    if (!items.length) return undefined;
+    const first = items[0];
+    const last = items.pop()!;
+    if (items.length) {
+      items[0] = last;
+      let index = 0;
+      while (true) {
+        const left = index * 2 + 1;
+        const right = left + 1;
+        let smallest = index;
+        if (left < items.length && queueLess(items[left], items[smallest])) smallest = left;
+        if (right < items.length && queueLess(items[right], items[smallest])) smallest = right;
+        if (smallest === index) break;
+        [items[index], items[smallest]] = [items[smallest], items[index]];
+        index = smallest;
+      }
+    }
+    return first;
+  }
+}
 
 export function stationSelector(value: string): StationSelector {
   const raw = String(value ?? "").trim();
@@ -42,6 +96,7 @@ export function stationSelector(value: string): StationSelector {
 }
 
 export function transferPairInfo(station: string, fromLine: string, toLine: string): Record<string, unknown> | null {
+  if (isDisjointHomonymTransfer(station, fromLine, toLine)) return null;
   const pairs = transfers().pairs ?? {};
   const direct = pairs[`${station}|${fromLine}|${toLine}`];
   if (direct) return direct as Record<string, unknown>;
@@ -93,6 +148,7 @@ export function routeAdjacency(mode: string): Map<string, AdjEdge[]> {
     const fromLine = String(p.from_line ?? "");
     const toLine = String(p.to_line ?? "");
     if (!station || !fromLine || !toLine || fromLine === toLine) continue;
+    if (isDisjointHomonymTransfer(station, fromLine, toLine)) continue;
     if (!ROUTING_STATIONS_BY_LINE[fromLine] || !ROUTING_STATIONS_BY_LINE[toLine]) continue;
     const fromExists = ROUTING_STATIONS_BY_LINE[fromLine].some((name) => canonStation(name) === station);
     const toExists = ROUTING_STATIONS_BY_LINE[toLine].some((name) => canonStation(name) === station);
@@ -100,6 +156,7 @@ export function routeAdjacency(mode: string): Map<string, AdjEdge[]> {
     addEdge(adj, [fromLine, station], [toLine, station], pairBaseSeconds(station, fromLine, toLine, p as Record<string, unknown>), "transfer");
   }
   for (const { station, fromLine, toLine, policy } of physicalTransferEntries()) {
+    if (isDisjointHomonymTransfer(station, fromLine, toLine)) continue;
     if (transferPairInfo(station, fromLine, toLine)) continue;
     if (!ROUTING_STATIONS_BY_LINE[fromLine] || !ROUTING_STATIONS_BY_LINE[toLine]) continue;
     const fromExists = ROUTING_STATIONS_BY_LINE[fromLine].some((name) => canonStation(name) === station);
@@ -121,17 +178,20 @@ export function stationLines(station: string): string[] {
 export function stationRequiresLineSelection(station: string): boolean {
   const c = canonStation(station);
   const lines = stationLines(c);
+  if (DISJOINT_HOMONYM_STATIONS.some((entry) => canonStation(entry.station) === c && entry.lines.every((line) => lines.includes(line)))) return true;
   if (lines.length < 2) return false;
   const connected = new Map(lines.map((line) => [line, new Set<string>()]));
   for (const p of Object.values(transfers().pairs ?? {})) {
     if (canonStation(p.station ?? "") !== c) continue;
     const a = String(p.from_line ?? ""); const b = String(p.to_line ?? "");
+    if (isDisjointHomonymTransfer(c, a, b)) continue;
     if (!connected.has(a) || !connected.has(b) || a === b) continue;
     connected.get(a)?.add(b); connected.get(b)?.add(a);
   }
   for (const entry of physicalTransferEntries()) {
     if (canonStation(entry.station) !== c) continue;
     const { fromLine: a, toLine: b } = entry;
+    if (isDisjointHomonymTransfer(c, a, b)) continue;
     if (!connected.has(a) || !connected.has(b) || a === b) continue;
     connected.get(a)?.add(b); connected.get(b)?.add(a);
   }
@@ -184,11 +244,11 @@ function dijkstra(
   if (src[0] !== "__SOURCE__" && excluded.has(src[0])) return null;
   const dist = new Map<string, number>([[nodeKey(src), 0]]);
   const previous = new Map<string, { node: Node; kind: PathEdge["kind"]; weight: number }>();
-  const queue: Array<{ d: number; order: number; node: Node }> = [{ d: 0, order: 0, node: src }];
+  const queue = new MinQueue();
+  queue.push({ d: 0, order: 0, node: src });
   let order = 1;
-  const push = (entry: { d: number; order: number; node: Node }): void => { queue.push(entry); queue.sort((a, b) => a.d - b.d || a.order - b.order); };
   while (queue.length) {
-    const current = queue.shift() as { d: number; order: number; node: Node };
+    const current = queue.shift()!;
     const uKey = nodeKey(current.node);
     if (current.d !== dist.get(uKey)) continue;
     if (uKey === nodeKey(target)) {
@@ -220,7 +280,7 @@ function dijkstra(
       if (nd < (dist.get(vKey) ?? Number.MAX_SAFE_INTEGER)) {
         dist.set(vKey, nd);
         previous.set(vKey, { node: current.node, kind: edge.kind, weight: edge.weight });
-        push({ d: nd, order: order++, node: edge.to });
+        queue.push({ d: nd, order: order++, node: edge.to });
       }
     }
   }
