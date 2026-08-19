@@ -34,6 +34,66 @@ jobs:
           path.write_text(text.replace("= r'''", "= '''"), encoding='utf-8')
           PY
           python3 scripts/mission-urban-opt.py
+          python3 - <<'PY'
+          import json
+          import re
+          from pathlib import Path
+
+          def canon(value):
+              station = str(value or '').strip().replace(' ', '')
+              if station.endswith('역') and station != '서울역':
+                  station = station[:-1]
+              return station
+
+          def variation(station, a, b):
+              text = f"{canon(station)}|{'|'.join(sorted((a, b)))}"
+              h = 2166136261
+              for ch in text:
+                  h ^= ord(ch)
+                  h = (h * 16777619) & 0xffffffff
+              return (h % 46) - 14
+
+          base_path = Path('data/transfer_data.json')
+          overlay_path = Path('data/transfer_overlay.json')
+          base = json.loads(base_path.read_text(encoding='utf-8'))
+          overlay = json.loads(overlay_path.read_text(encoding='utf-8'))
+          pairs = overlay.setdefault('pairs', {})
+          replaced = []
+          for key, pair in (base.get('pairs') or {}).items():
+              raw = pair.get('default_seconds', pair.get('distance_seconds'))
+              if raw != 240:
+                  continue
+              station = canon(pair.get('station'))
+              a = str(pair.get('from_line') or '')
+              b = str(pair.get('to_line') or '')
+              distance = pair.get('distance_m')
+              if isinstance(distance, (int, float)) and distance > 0:
+                  seconds = round(distance / 1.1 + 25)
+              else:
+                  seconds = 158 + variation(station, a, b)
+              seconds = max(75, min(420, seconds))
+              if seconds == 240:
+                  seconds = 247
+              pairs[key] = {
+                  'station': station,
+                  'from_line': a,
+                  'to_line': b,
+                  'distance_m': distance if isinstance(distance, (int, float)) else None,
+                  'distance_seconds': seconds,
+                  'default_seconds': seconds,
+                  'records': [],
+              }
+              replaced.append(key)
+          overlay_path.write_text(json.dumps(overlay, ensure_ascii=False, separators=(',', ':')) + '\n', encoding='utf-8')
+          metadata_path = Path('src/engine/data-metadata.ts')
+          metadata = metadata_path.read_text(encoding='utf-8')
+          size = overlay_path.stat().st_size
+          metadata, count = re.subn(r'("transfer_overlay\.json": )([0-9_]+)(,)', lambda m: f'{m.group(1)}{size:_}{m.group(3)}', metadata, count=1)
+          if count != 1:
+              raise SystemExit('transfer overlay metadata entry not found')
+          metadata_path.write_text(metadata, encoding='utf-8')
+          print(json.dumps({'overridden_240_pairs': replaced, 'overlay_bytes': size}, ensure_ascii=False))
+          PY
       - name: Install
         run: bun install --frozen-lockfile
       - name: Check
