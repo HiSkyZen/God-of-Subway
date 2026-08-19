@@ -56,11 +56,20 @@ function gtxLocationLabel(line: GtxLine, current: string, wanted: 1 | -1, rawSta
   if (status === "0" || status === "3") {
     const stations = GTX_LINES[line].stations;
     const ci = stations.indexOf(current as never);
+    if (ci < 0) return current;
     const previousIndex = wanted === 1 ? ci - 1 : ci + 1;
     const previous = previousIndex >= 0 && previousIndex < stations.length ? stations[previousIndex] : "";
     return previous ? `${previous}-${current}` : `${current} 진입`;
   }
   return current;
+}
+
+function gtxStatusSummary(rawStatus: unknown, current: string): string {
+  const status = String(rawStatus ?? "").trim();
+  if (status === "1") return "도착";
+  if (status === "2") return "출발";
+  if (status === "0" || status === "3") return "운행 중";
+  return current ? "운행 중" : "시간표 진행 중";
 }
 
 function publicGtxCandidate(line: GtxLine, candidate: GtxCandidate, from: string, to: string, ready: Date, selected = false): Record<string, unknown> {
@@ -238,6 +247,7 @@ export async function calculateGtxTrip(payload: LiveTripPayload, fetchImpl: Fetc
   let remaining = Math.max(0, totalRide - Math.max(0, Math.round((now.getTime() - boarded.getTime()) / 1000)));
   let current = "";
   let locationLabel = "시간표 위치 계산 중";
+  let currentStatus = "시간표 진행 중";
   let arrived = remaining <= 0;
   let projected = true;
   let method = "GTX-A 공개 시간표 · 탑승 후 경과시간 추적";
@@ -245,6 +255,7 @@ export async function calculateGtxTrip(payload: LiveTripPayload, fetchImpl: Fetc
     const cfg = GTX_LINES[line];
     current = canonStation(live.statnNm);
     locationLabel = gtxLocationLabel(line, current, wanted, live.trainSttus);
+    currentStatus = gtxStatusSummary(live.trainSttus, current);
     const ci = cfg.stations.indexOf(current as never);
     const observed = parseDt(live.recptnDt ?? live.lastRecptnDt);
     const age = Math.max(0, (now.getTime() - observed.getTime()) / 1000);
@@ -258,6 +269,7 @@ export async function calculateGtxTrip(payload: LiveTripPayload, fetchImpl: Fetc
     }
   }
   const alight = new Date(now.getTime() + remaining * 1000);
+  const status = arrived ? "도착" : currentStatus;
   const resultSegment = {
     index: 0,
     line,
@@ -279,6 +291,7 @@ export async function calculateGtxTrip(payload: LiveTripPayload, fetchImpl: Fetc
     current_station_name: current,
     location: locationLabel,
     location_label: locationLabel,
+    status,
     confidence: projected ? "중간" : "높음",
     method,
     projected,
@@ -296,7 +309,7 @@ export async function calculateGtxTrip(payload: LiveTripPayload, fetchImpl: Fetc
     remaining_seconds: remaining,
     current_segment_remaining_seconds: remaining,
     current_station: current,
-    current_status: arrived ? "도착" : current ? locationLabel : "시간표 진행 중",
+    current_status: status,
     segments: [resultSegment],
     warnings: [],
   };
