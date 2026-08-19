@@ -34,6 +34,7 @@ function transferText(segment: RouteSegment): string {
 }
 function infoText(value: unknown): string { return typeof value === "string" && value.trim() ? value.trim() : ""; }
 function trackingKey(candidate: RouteSegment): string { return String(candidate.tracking_id ?? candidate.train_no ?? "").trim(); }
+function publicTrainText(candidate: RouteSegment): string { return String(candidate.train_no ?? "").trim() || "시간표 기반"; }
 function trainLabel(candidate: RouteSegment): string {
   const publicNo = String(candidate.train_no ?? "").trim();
   return publicNo ? `${publicNo}열차` : "시간표 열차";
@@ -104,7 +105,7 @@ export function UpstreamJourneyView({
           <article className={`ride-card ${index === activeIndex ? "active" : ""}`}>
             <div className="ride-line"><span className={`line-tag line-${lineClass(segment.line)}`}>{segment.line}</span><strong>{segment.destination ? `${segment.destination} 방면` : segment.direction || "운행 방향 확인"}</strong></div>
             <div className="ride-times"><span><b>{clock(segment.board_dt)}</b> {segment.from} 승차</span><span className="ride-arrow">→</span><span><b>{clock(segment.alight_dt)}</b> {segment.to} 하차</span></div>
-            <div className="ride-meta"><span>열차 <b>{visibleTrainLabel}</b></span><span>현재 위치 <b>{segment.current_station_name || segment.current_station || segment.location || "확인 중"}</b></span><span>지연 <b>{Math.abs(Number(segment.delay_seconds) || 0) < 30 ? "정시권" : `${Number(segment.delay_seconds) >= 0 ? "+" : "−"}${Math.round(Math.abs(Number(segment.delay_seconds)) / 60)}분`}</b></span><span>신뢰도 <b>{segment.confidence || "낮음"}</b></span></div>
+            <div className="ride-meta"><span>열차 <b>{publicTrainText(segment)}</b></span><span>현재 위치 <b>{segment.current_station_name || segment.current_station || segment.location || "확인 중"}</b></span><span>지연 <b>{Math.abs(Number(segment.delay_seconds) || 0) < 30 ? "정시권" : `${Number(segment.delay_seconds) >= 0 ? "+" : "−"}${Math.round(Math.abs(Number(segment.delay_seconds)) / 60)}분`}</b></span><span>신뢰도 <b>{segment.confidence || "낮음"}</b></span></div>
             {trackingId && <div className="ride-actions"><button type="button" className="primary-button" disabled={tracking && String(liveTrip?.boardedTrainNo) === trackingId} onClick={() => onBoard(index, trackingId, visibleTrainLabel)}>{tracking && String(liveTrip?.boardedTrainNo) === trackingId ? "✓ 탑승 추적 중" : "이 열차를 탔어요"}</button>{candidates.length > 0 && <button type="button" className="secondary-button" aria-expanded={choosing} onClick={() => setCandidateIndex(choosing ? null : index)}>다른 열차를 탔어요</button>}</div>}
             {choosing && candidates.length > 0 && <div className="train-choice-panel" aria-label="주변 열차 선택">{candidates.map((candidate) => <button type="button" className="train-choice" key={candidateKey(candidate)} onClick={() => { onBoard(index, trackingKey(candidate), trainLabel(candidate)); setCandidateIndex(null); }}><strong>{trainLabel(candidate)}</strong><span>{clock(candidate.board_dt)} 승차{candidate.current_station ? ` · ${candidate.current_station}` : ""}</span></button>)}</div>}
           </article>
