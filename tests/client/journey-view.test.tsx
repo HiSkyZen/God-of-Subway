@@ -74,8 +74,16 @@ test("public train number is shown without leaking the Shinbundang timetable id"
   const sb: RouteSegment[] = [{ line: "신분당선", from: "강남", to: "판교", train_no: "D007", tracking_id: "SB-W-0042", board_dt: "2026-08-18 10:00:00", alight_dt: "2026-08-18 10:15:00" }];
   const sbResult: AutoRouteResponse = { ok: true, from: "강남", to: "판교", arrival_time: "2026-08-18 10:15:00", segments: sb };
   const html = renderToStaticMarkup(<UpstreamJourneyView result={sbResult} segments={sb} arrivalTime={sbResult.arrival_time} totalSeconds={900} activeIndex={0} liveTrip={null} onBoard={() => undefined} onRefresh={() => undefined} onExcludeGtx={() => undefined} />);
-  expect(html).toContain("D007열차");
+  expect(html).toContain("D007");
+  expect(html).not.toContain("열차 <b>D007열차</b>");
   expect(html).not.toContain("SB-W-0042");
+});
+
+test("tracking notifications accept public labels while storing internal ids", async () => {
+  const source = await Bun.file("src/client/use-live-journey.ts").text();
+  expect(source).toContain("displayLabel?: string");
+  expect(source).toContain("publicLabel ? `${publicLabel}를 추적합니다.`");
+  expect(source).toContain("segment?.tracking_id ?? segment?.train_no");
 });
 
 test("app source keeps time controls, tracking guard, theme, favorites, and opt-in experiment panel", async () => {
