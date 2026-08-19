@@ -1,4 +1,4 @@
-import { RedisClient } from "bun";
+import { RedisClient, type RedisOptions } from "bun";
 
 export interface ValkeyCommandTransport {
   command<T = unknown>(args: readonly string[]): Promise<T>;
@@ -8,6 +8,16 @@ const allowedProtocols = new Set(["redis:", "rediss:", "valkey:", "valkeys:"]);
 let nativeClient: RedisClient | null = null;
 let nativeClientUrl = "";
 let overrideTransport: ValkeyCommandTransport | null | undefined;
+
+export const nativeValkeyClientOptions = {
+  autoReconnect: true,
+  enableAutoPipelining: true,
+  // Commands issued during a serverless cold start must wait for TCP/TLS + HELLO/AUTH.
+  // Disabling the offline queue makes Bun reject those first commands while status=Connecting.
+  enableOfflineQueue: true,
+  connectionTimeout: 2_500,
+  maxRetries: 2,
+} satisfies RedisOptions;
 
 export function configuredValkeyUrl(): string | null {
   const raw = (Bun.env.VALKEY_URL || Bun.env.REDIS_URL || "").trim();
@@ -30,13 +40,7 @@ function nativeTransport(): ValkeyCommandTransport | null {
   const url = configuredValkeyUrl();
   if (!url) return null;
   if (!nativeClient || nativeClientUrl !== url) {
-    nativeClient = new RedisClient(url, {
-      autoReconnect: true,
-      enableAutoPipelining: true,
-      enableOfflineQueue: false,
-      connectionTimeout: 2_500,
-      maxRetries: 2,
-    });
+    nativeClient = new RedisClient(url, nativeValkeyClientOptions);
     nativeClientUrl = url;
   }
   return {
