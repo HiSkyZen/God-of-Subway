@@ -85,6 +85,7 @@ jobs:
               }
               replaced.append(key)
           overlay_path.write_text(json.dumps(overlay, ensure_ascii=False, separators=(',', ':')) + '\n', encoding='utf-8')
+
           metadata_path = Path('src/engine/data-metadata.ts')
           metadata = metadata_path.read_text(encoding='utf-8')
           size = overlay_path.stat().st_size
@@ -92,13 +93,22 @@ jobs:
           if count != 1:
               raise SystemExit('transfer overlay metadata entry not found')
           metadata_path.write_text(metadata, encoding='utf-8')
-          test_path = Path('tests/engine/urban-lines.test.ts')
-          test_text = test_path.read_text(encoding='utf-8')
+
+          urban_test_path = Path('tests/engine/urban-lines.test.ts')
+          urban_test = urban_test_path.read_text(encoding='utf-8')
           old = 'expect([...TIMETABLE_ONLY_LINES].sort()).toEqual(EXPECTED);'
           new = 'expect([...TIMETABLE_ONLY_LINES].map(String).sort()).toEqual(EXPECTED);'
-          if old not in test_text:
+          if old not in urban_test:
               raise SystemExit('urban-line type assertion target not found')
-          test_path.write_text(test_text.replace(old, new, 1), encoding='utf-8')
+          urban_test_path.write_text(urban_test.replace(old, new, 1), encoding='utf-8')
+
+          engine_test_path = Path('tests/engine/engine.test.ts')
+          engine_test = engine_test_path.read_text(encoding='utf-8')
+          if 'toHaveLength(18)' not in engine_test or 'stationLines: 16' not in engine_test:
+              raise SystemExit('engine count assertions not found')
+          engine_test = engine_test.replace('toHaveLength(18)', 'toHaveLength(23)', 1)
+          engine_test = engine_test.replace('stationLines: 16', 'stationLines: 21', 1)
+          engine_test_path.write_text(engine_test, encoding='utf-8')
           print(json.dumps({'overridden_240_pairs': replaced, 'overlay_bytes': size}, ensure_ascii=False))
           PY
       - name: Install
