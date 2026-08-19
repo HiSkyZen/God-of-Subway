@@ -1,4 +1,4 @@
-import type { ApiEnvelope, AutoRouteRequest, AutoRouteResponse, HealthResponse, PushAlertRequest, PushAlertResponse, PushAlertStatusRequest, PushAlertStatusResponse, PushSubscriptionSaveResponse, RouteRequest, RouteResponse, StationsResponse, TripUpdateRequest, TripUpdateResponse } from "./contract";
+import type { ApiEnvelope, AutoRouteRequest, AutoRouteResponse, HealthResponse, PushAlertRequest, PushAlertResponse, PushAlertStatusRequest, PushAlertStatusResponse, PushPublicKeyResponse, PushSubscriptionSaveResponse, RouteRequest, RouteResponse, StationsResponse, TripUpdateRequest, TripUpdateResponse } from "./contract";
 
 export class ApiError extends Error {
   readonly status: number;
@@ -39,11 +39,7 @@ export class ApiClient {
   }
 
   async get<T extends ApiEnvelope>(url: string, timeoutMs = this.defaultTimeoutMs): Promise<T> {
-    const payload = await this.request<T>(url, { cache: "no-store" }, timeoutMs);
-    if (url === "/api/push/public-key" && payload.capable === false && typeof payload.configuration_message === "string") {
-      throw new ApiError(payload.configuration_message, 200, payload);
-    }
-    return payload;
+    return this.request<T>(url, { cache: "no-store" }, timeoutMs);
   }
 
   async post<T extends ApiEnvelope>(url: string, body: unknown, timeoutMs = this.defaultTimeoutMs): Promise<T> {
@@ -84,6 +80,13 @@ export class ApiClient {
   route(body: RouteRequest): Promise<RouteResponse> { return this.post<RouteResponse>("/api/route", body); }
   autoRoute(body: AutoRouteRequest): Promise<AutoRouteResponse> { return this.post<AutoRouteResponse>("/api/auto_route", body); }
   tripUpdate(body: TripUpdateRequest): Promise<TripUpdateResponse> { return this.post<TripUpdateResponse>("/api/trip_update", body); }
+  async pushPublicKey(): Promise<PushPublicKeyResponse> {
+    const payload = await this.get<PushPublicKeyResponse>("/api/push/public-key");
+    if (payload.capable === false && typeof payload.configuration_message === "string") {
+      throw new ApiError(payload.configuration_message, 200, payload);
+    }
+    return payload;
+  }
   savePushSubscription(body: unknown): Promise<PushSubscriptionSaveResponse> { return this.post<PushSubscriptionSaveResponse>("/api/push/subscriptions", body); }
   deletePushSubscription(body: unknown): Promise<ApiEnvelope> { return this.delete<ApiEnvelope>("/api/push/subscriptions", body); }
   savePushAlert(body: PushAlertRequest): Promise<PushAlertResponse> { return this.post<PushAlertResponse>("/api/push/alerts", body); }
