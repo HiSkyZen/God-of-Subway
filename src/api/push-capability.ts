@@ -1,9 +1,16 @@
+import { valkeyConfigured } from "../infra/valkey";
 import { redisConfiguration } from "./push/config";
+
+export type PushConfigurationIssue =
+  | "vapid_unavailable"
+  | "storage_unavailable"
+  | "scheduler_unavailable";
 
 export interface PushCapabilities {
   subscriptionCapable: boolean;
   arrivalAlertCapable: boolean;
   schedulerMode: "external" | "interval" | null;
+  configurationIssues: PushConfigurationIssue[];
 }
 export interface VapidConfiguration {
   capable: boolean;
@@ -43,7 +50,8 @@ export const vapidConfiguration = (): VapidConfiguration => {
   return { capable, publicKey, privateKey, subject };
 };
 
-const persistentStoreConfigured = (): boolean => Bun.env.NODE_ENV !== "production"
+export const pushPersistentStoreConfigured = (): boolean => Bun.env.NODE_ENV !== "production"
+  || valkeyConfigured()
   || redisConfiguration() !== null;
 const intervalConfigured = (): boolean => {
   if (Bun.env.VERCEL === "1") return false;
@@ -58,11 +66,18 @@ const externalConfigured = (): boolean =>
   && Boolean(Bun.env.CRON_SECRET?.trim());
 
 export const pushCapabilities = (): PushCapabilities => {
-  const subscriptionCapable = vapidConfiguration().capable && persistentStoreConfigured();
+  const vapidCapable = vapidConfiguration().capable;
+  const storageCapable = pushPersistentStoreConfigured();
   const schedulerMode = intervalConfigured() ? "interval" : externalConfigured() ? "external" : null;
+  const configurationIssues: PushConfigurationIssue[] = [];
+  if (!vapidCapable) configurationIssues.push("vapid_unavailable");
+  if (!storageCapable) configurationIssues.push("storage_unavailable");
+  if (schedulerMode === null) configurationIssues.push("scheduler_unavailable");
+  const subscriptionCapable = vapidCapable && storageCapable;
   return {
     subscriptionCapable,
     arrivalAlertCapable: subscriptionCapable && schedulerMode !== null,
     schedulerMode,
+    configurationIssues,
   };
 };

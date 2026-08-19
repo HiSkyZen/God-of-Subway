@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import type { Dispatch, SetStateAction } from "react";
 import { apiClient, ApiError } from "./api";
-import type { LiveTripState, PushPublicKeyResponse } from "./contract";
+import type { LiveTripState } from "./contract";
 import { buildPushAlertRequest, markAlertCancellationPending, pushAlertStatusIsActive, pushTripSnapshot, shouldReconcilePushOnVisibility } from "./push-alert";
 import { detectPushCapabilities, pushSubscriptionSyncPayload, reconcilePushSubscription } from "./push";
 import { watchForInstalledUpdate } from "./pwa";
@@ -148,7 +148,7 @@ export function usePushPwa(notify: (message: string) => void, serviceWorkerPath 
       const permission = await Notification.requestPermission();
       updatePushState(permission);
       if (permission !== "granted") { notifyRef.current(permission === "denied" ? "브라우저 설정에서 알림을 허용해 주세요." : "알림 권한이 아직 허용되지 않았습니다."); return; }
-      const keyResponse = await apiClient.get<PushPublicKeyResponse>("/api/push/public-key");
+      const keyResponse = await apiClient.pushPublicKey();
       capableRef.current = Boolean(keyResponse.arrival_alert_capable ?? keyResponse.capable);
       setArrivalAlertCapable(capableRef.current);
       if (!keyResponse.capable || !keyResponse.public_key) { updatePushState("default"); notifyRef.current("알림 서버가 아직 구성되지 않았습니다."); return; }
@@ -188,7 +188,7 @@ export function usePushPwa(notify: (message: string) => void, serviceWorkerPath 
     if ("Notification" in window) updatePushState(Notification.permission); else updatePushState("unsupported");
 
     const reconcileExistingPush = async (): Promise<void> => {
-      const response = await apiClient.get<PushPublicKeyResponse>("/api/push/public-key");
+      const response = await apiClient.pushPublicKey();
       if (!mounted) return;
       capableRef.current = Boolean(response.arrival_alert_capable ?? response.capable);
       setArrivalAlertCapable(capableRef.current);

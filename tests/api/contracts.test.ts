@@ -122,7 +122,19 @@ describe("Bun API contract", () => {
     try {
       const response = await request("/api/push/public-key");
       expect(response.status).toBe(200);
-      expect(await response.json()).toEqual({ ok: true, capable: false, subscription_capable: false, arrival_alert_capable: false, scheduler_mode: null, public_key: null });
+      const body = await response.json();
+      expect(body).toMatchObject({
+        ok: true,
+        capable: false,
+        subscription_capable: false,
+        arrival_alert_capable: false,
+        scheduler_mode: null,
+        public_key: null,
+        configuration_issues: expect.arrayContaining(["vapid_unavailable"]),
+        configuration_message: "Web Push VAPID 키가 구성되지 않았습니다.",
+      });
+      expect(JSON.stringify(body)).not.toContain("privateKey");
+      expect(JSON.stringify(body)).not.toContain("VAPID_PRIVATE_KEY");
       expect((await request("/api/push/subscriptions", { method: "POST", body: "{}" })).status).toBe(422);
     } finally {
       if (saved.publicKey === undefined) delete Bun.env.VAPID_PUBLIC_KEY; else Bun.env.VAPID_PUBLIC_KEY = saved.publicKey;
