@@ -39,6 +39,13 @@ export function publicTrainNumber(line: string, trackingId: unknown): string {
   if (line.startsWith("GTX-A")) return formatGtxTrainNumber(id);
   return id;
 }
+function rememberSinbundangPublicNumbers(rows: PositionRow[]): void {
+  for (const row of rows) {
+    const scheduleId = String(row._jigeumta_schedule_id ?? "").trim();
+    const display = String(row._jigeumta_display_train_no ?? "").trim();
+    if (scheduleId && display) sinbundangFormationByScheduleId.set(scheduleId, display);
+  }
+}
 
 function apiKey(): string { const value = Bun.env.SEOUL_API_KEY?.trim() ?? ""; if (!value) throw new Error("SEOUL_API_KEY 환경변수가 설정되지 않았습니다."); return value; }
 function cacheGet(cache: PositionCache, line: string): PositionCacheEntry | PositionRow[] | undefined { return cache instanceof Map ? cache.get(line) : cache[line]; }
@@ -90,7 +97,13 @@ function normalizeRows(line: string, rows: PositionRow[]): PositionRow[] { const
 
 export async function fetchPosition(line: string, timeout = 5, fetchImpl: FetchLike = fetch): Promise<{ ok: boolean; error: string | null; data: RealtimeEnvelope | null }> {
   const persistent = fetchImpl === fetch; const cacheKey = `realtime:${line}`;
-  if (persistent) { const fresh = await cacheGetJson<RealtimeEnvelope>(cacheKey); if (fresh) return { ok: true, error: null, data: { ...fresh.value, _jigeumta_cache_state: fresh.stale ? "stale" : "hit" } }; }
+  if (persistent) {
+    const fresh = await cacheGetJson<RealtimeEnvelope>(cacheKey);
+    if (fresh) {
+      const rows = positionRows(fresh.value); if (line === "신분당선") rememberSinbundangPublicNumbers(rows);
+      return { ok: true, error: null, data: { ...fresh.value, _jigeumta_cache_state: fresh.stale ? "stale" : "hit" } };
+    }
+  }
   const key = apiKey(); let lastError = "실시간 위치 조회 실패"; let lastData: RealtimeEnvelope | null = null;
   for (const query of queries(line)) {
     const url = `${SEOUL_REALTIME_BASE}/${key}/json/realtimePosition/0/300/${encodeURIComponent(query)}`; const controller = new AbortController(); const timer = setTimeout(() => controller.abort(), timeout * 1000); const started = performance.now();
@@ -106,7 +119,13 @@ export async function fetchPosition(line: string, timeout = 5, fetchImpl: FetchL
     } catch (error) { lastError = error instanceof Error ? `${error.name}: ${error.message}` : String(error); logEvent("warn", "realtime_fetch_failure", { line, query, error: lastError, duration_ms: Math.round(performance.now() - started) }); }
     finally { clearTimeout(timer); }
   }
-  if (persistent) { const stale = await cacheGetJson<RealtimeEnvelope>(cacheKey, true); if (stale) { logEvent("warn", "realtime_stale_cache", { line, error: lastError }); return { ok: true, error: lastError, data: { ...stale.value, _jigeumta_cache_state: "stale" } }; } }
+  if (persistent) {
+    const stale = await cacheGetJson<RealtimeEnvelope>(cacheKey, true);
+    if (stale) {
+      const rows = positionRows(stale.value); if (line === "신분당선") rememberSinbundangPublicNumbers(rows);
+      logEvent("warn", "realtime_stale_cache", { line, error: lastError }); return { ok: true, error: lastError, data: { ...stale.value, _jigeumta_cache_state: "stale" } };
+    }
+  }
   return { ok: false, error: lastError, data: lastData };
 }
 export function positionRows(data: RealtimeEnvelope | null): PositionRow[] { return Array.isArray(data?.realtimePositionList) ? data.realtimePositionList : []; }
