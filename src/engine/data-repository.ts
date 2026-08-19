@@ -19,6 +19,43 @@ function asRecord(value: unknown): JsonObject { return isObject(value) ? value :
 function asStringArray(value: unknown): string[] { return Array.isArray(value) ? value.filter((x): x is string => typeof x === "string") : []; }
 function asRawTrains(value: unknown): Record<string, RawTrain> { const result: Record<string, RawTrain> = {}; for (const [key, raw] of Object.entries(asRecord(value))) if (isObject(raw)) result[key] = raw as RawTrain; return result; }
 
+function firstServiceSecond(train: RawTrain): number {
+  for (const stop of train.stops ?? []) {
+    const value = typeof stop.dep === "number" ? stop.dep : typeof stop.arr === "number" ? stop.arr : null;
+    if (value !== null && Number.isFinite(value)) return value;
+  }
+  return Number.MAX_SAFE_INTEGER;
+}
+function sinbundangModeCode(mode: string): string {
+  if (mode === "weekday") return "W";
+  if (mode === "holiday") return "H";
+  return mode.replace(/[^0-9A-Za-z]/g, "").slice(0, 3).toUpperCase() || "X";
+}
+/**
+ * The imported Shinbundang workbook used DX-prefixed labels only as source-row
+ * identifiers. They are not public train numbers. Convert the source rows to a
+ * timetable-derived internal index before the rest of the engine can see them.
+ */
+function indexedSinbundangTrains(value: unknown): Record<string, Record<string, RawTrain>> {
+  const result: Record<string, Record<string, RawTrain>> = {};
+  for (const [mode, rawValue] of Object.entries(asRecord(value))) {
+    const trains = Object.values(asRecord(rawValue))
+      .filter(isObject)
+      .map((raw) => {
+        const clean = { ...(raw as RawTrain) };
+        if (/^DX/i.test(String(clean.linked_train_no ?? ""))) delete clean.linked_train_no;
+        return clean;
+      });
+    trains.sort((a, b) => firstServiceSecond(a) - firstServiceSecond(b)
+      || String(a.direction ?? "").localeCompare(String(b.direction ?? ""))
+      || String(a.start ?? "").localeCompare(String(b.start ?? ""))
+      || String(a.dest ?? "").localeCompare(String(b.dest ?? "")));
+    const code = sinbundangModeCode(mode);
+    result[mode] = Object.fromEntries(trains.map((train, index) => [`SB-${code}-${String(index + 1).padStart(4, "0")}`, train]));
+  }
+  return result;
+}
+
 export interface DataRepository { readonly data: EngineData; reload(): void; loadedDatasets(): DatasetKey[]; validate(): { files: string[]; stationLines: number; graphModes: string[] }; }
 class JsonDataRepository implements DataRepository {
   readonly data: EngineData;
@@ -37,7 +74,7 @@ class JsonDataRepository implements DataRepository {
       extra: { enumerable: true, get: () => this.cached("extra", () => {
         const extra = { ...(asRecord(readJson<unknown>("korail_extra_lines_schedule.json")) as EngineData["extra"]) };
         const sb = this.cached("sinbundang", () => asRecord(readJson<unknown>("sinbundang_schedule.json")));
-        extra["신분당선"] = { stations: asStringArray(sb.stations), trains: asRecord(sb.trains) as Record<string, Record<string, RawTrain>> };
+        extra["신분당선"] = { stations: asStringArray(sb.stations), trains: indexedSinbundangTrains(sb.trains) };
         return extra;
       }) },
       holidays: { enumerable: true, get: () => this.cached("holidays", () => asRecord(readJson<unknown>("kr_holidays_2026_2035.json")) as EngineData["holidays"]) },
