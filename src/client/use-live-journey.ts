@@ -128,7 +128,8 @@ export function useLiveJourney(options: LiveJourneyOptions): LiveJourneyControll
   const autoBoardWaiting = useCallback((trip: StoredTrip, result: RouteResponse | null): void => {
     if (!result || trip.phase !== "waiting") return;
     const segment = result.segments?.[0];
-    const candidate = segment?.tracking_id ?? segment?.train_no;
+    const candidateValue = segment?.tracking_id ?? segment?.train_no;
+    const candidate = typeof candidateValue === "string" || typeof candidateValue === "number" ? candidateValue : "";
     if (!candidate) return;
     const latest = liveTripRef.current;
     if (!latest || latest.phase !== "waiting" || latest.activeIndex !== trip.activeIndex || latest.journeyStartedAt !== trip.journeyStartedAt) return;
