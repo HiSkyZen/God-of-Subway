@@ -28,6 +28,11 @@ const pair = (station: string, a: string, b: string, value: TransferPolicyOverri
  * Physical-layout corrections have priority over imported transfer_data.json.
  * In particular, upstream V13.5.4 marks 대곡 경의중앙선↔서해선 as 0 seconds even
  * though the lines use separate platforms connected by a transfer passage.
+ *
+ * GTX-A entries below are also topology edges: imported upstream transfer data
+ * predates the integrated GTX route graph, so these explicit pairs are required
+ * to connect GTX platforms to the ordinary network without reviving unsafe
+ * same-name auto-transfer behavior.
  */
 const OVERRIDES = new Map<string, TransferPolicyOverride>([
   ...pair("대곡", "경의중앙선", "서해선", { seconds: 180, mode: "passage", source: "web-verified", note: "별도 승강장·환승통로; 0초 제자리환승 금지" }),
@@ -40,6 +45,23 @@ const OVERRIDES = new Map<string, TransferPolicyOverride>([
   ...["한대앞", "중앙", "고잔", "초지", "안산", "신길온천", "정왕"].flatMap((station) => pair(station, "4호선", "수인분당선", { seconds: 0, mode: "same-platform", source: "web-verified", note: "안산선 공용 선로·동일 방향 승강장" })),
   ...pair("오이도", "4호선", "수인분당선", { seconds: 15, mode: "cross-platform", source: "web-verified", note: "방향별 인접 승강장 평면환승; 운행시각에 따라 승강장 변동 가능" }),
   ...pair("금정", "1호선", "4호선", { seconds: 15, mode: "cross-platform", source: "web-verified", note: "동일 방향 평면환승" }),
+
+  // GTX-A 북부: 현재 운정중앙-서울역 구간의 실제 환승 가능 노선만 연결한다.
+  ...pair("대곡", "GTX-A(북부)", "3호선", { seconds: 270, mode: "passage", source: "web-verified", note: "GTX-A 승강장→3호선 승강장 현장 측정 약 4분30초(고속 엘리베이터, 평일 낮)" }),
+  ...pair("대곡", "GTX-A(북부)", "경의중앙선", { seconds: 320, mode: "passage", source: "web-verified", note: "GTX-A 승강장→경의중앙선 승강장 현장 측정 약 5분20초(고속 엘리베이터, 평일 낮)" }),
+  ...pair("대곡", "GTX-A(북부)", "서해선", { seconds: 330, mode: "passage", source: "model", note: "GTX-A 지상 2층 T자 환승통로와 서해선 별도 승강장 구조 기준 보수 추정" }),
+  ...pair("연신내", "GTX-A(북부)", "3호선", { seconds: 330, mode: "passage", source: "model", note: "GTX-A 대심도 승강장과 3호선 대합실 수직 환승 구조 기준 5~7분 권장 범위 내 추정" }),
+  ...pair("연신내", "GTX-A(북부)", "6호선", { seconds: 300, mode: "passage", source: "model", note: "GTX-A 상승 동선 중 6호선 환승통로 연결 구조 기준 보수 추정" }),
+  ...pair("서울역", "GTX-A(북부)", "1호선", { seconds: 240, mode: "passage", source: "model", note: "2025-02-15 개통 GTX-A↔1호선 전용 환승통로 반영; 실측 미확보 보수 추정" }),
+  ...pair("서울역", "GTX-A(북부)", "4호선", { seconds: 300, mode: "passage", source: "model", note: "GTX-A 서울역 환승대합실·4호선 연결 동선 기준 보수 추정" }),
+  ...pair("서울역", "GTX-A(북부)", "경의중앙선", { seconds: 360, mode: "passage", source: "model", note: "GTX-A 서울역과 경의중앙선 승강장 간 장거리 역사 내 이동 보수 추정" }),
+  ...pair("서울역", "GTX-A(북부)", "공항철도", { seconds: 360, mode: "passage", source: "model", note: "GTX-A 서울역과 공항철도 승강장 간 장거리 역사 내 이동 보수 추정" }),
+
+  // GTX-A 남부: 수서-동탄 구간의 개통 환승역만 연결한다.
+  ...pair("수서", "GTX-A(남부)", "3호선", { seconds: 210, mode: "passage", source: "model", note: "GTX-A 수서역↔3호선 연결 환승통로 기준 보수 추정" }),
+  ...pair("수서", "GTX-A(남부)", "수인분당선", { seconds: 240, mode: "passage", source: "model", note: "GTX-A 수서역↔수인분당선 연결 환승통로 기준 보수 추정" }),
+  ...pair("성남", "GTX-A(남부)", "경강선", { seconds: 180, mode: "passage", source: "model", note: "GTX-A 성남역↔경강선 판교 방면 연결 환승통로 기준 추정" }),
+  ...pair("구성", "GTX-A(남부)", "수인분당선", { seconds: 180, mode: "passage", source: "model", note: "GTX-A 구성역↔수인분당선 환승통로 기준 추정" }),
 ]);
 
 const HUB_DEMAND: Record<string, number> = {
