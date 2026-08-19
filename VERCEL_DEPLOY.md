@@ -60,6 +60,7 @@ MIME/size/orphan을 확인합니다. `bun run verify:aot`는 AOT 서버를 기�
 5. Build Command는 `bun run build:all` (저장소의 `vercel.json`에 포함)
 6. Environment Variables:
    SEOUL_API_KEY = 서울 열린데이터광장 인증키
+   VALKEY_URL = rediss://... (권장, 실시간 공유 캐시 및 Production Web Push 저장소)
 7. Deploy
 
 ## 배포 후 확인
@@ -70,6 +71,7 @@ MIME/size/orphan을 확인합니다. `bun run verify:aot`는 AOT 서버를 기�
 /api/health에서:
 - ok: true
 - api_key_configured: true
+- cache.backend: `native-valkey` (VALKEY_URL 설정 시)
 인지 확인.
 
 ## 중요
@@ -80,6 +82,34 @@ wildcard query를 `api/index.ts`가 원래 `/api/<path>`로 복원합니다. 이
 pathname으로 들어온 Function 요청은 그대로 처리합니다. 이 두 경계는
 `tests/api/vercel-adapter.test.ts`에서 각각 검증합니다.
 
+## Valkey / Redis 공유 상태
+
+권장 Production 구성은 Bun native Redis client가 직접 접속하는 Valkey/Redis 한 개입니다.
+Bun은 `VALKEY_URL`을 우선하고 `REDIS_URL`을 fallback으로 사용합니다. Aiven 같은 TLS
+서비스에서는 일반적으로 provider가 제공하는 `rediss://` connection URL을 그대로
+`VALKEY_URL`에 설정합니다.
+
+```text
+VALKEY_URL=rediss://<user>:<password>@<host>:<port>/<db>
+REDIS_PREFIX=jigeumta:v14
+REALTIME_CACHE_TTL_SECONDS=12
+REALTIME_STALE_TTL_SECONDS=90
+REALTIME_REFRESH_LEASE_SECONDS=5
+```
+
+이 연결은 다음 상태를 함께 저장합니다.
+- 서울 실시간 위치 raw source cache (`realtime-source:*`)
+- refresh single-flight lease (`lock:realtime-source:*`)
+- Web Push subscription / alert hash
+- registration rate limit
+- dispatch lease / delivery claim
+
+실시간 캐시는 내부 노선명이 아니라 upstream source 단위로 저장합니다. 예를 들어
+GTX-A 북부와 남부는 같은 서울시 `1032` source cache를 공유한 뒤 각각 필요한 역만
+filtering합니다. fresh TTL이 끝났을 때 여러 Vercel instance가 동시에 miss를 만나도
+`SET NX EX` refresh lease를 획득한 한 instance만 upstream을 갱신하고, 나머지는
+stale data가 남아 있으면 즉시 그것을 반환합니다.
+
 ## Web Push 환경변수
 
 선택 기능인 Web Push를 사용하려면 다음을 설정합니다.
@@ -88,8 +118,7 @@ pathname으로 들어온 Function 요청은 그대로 처리합니다. 이 두 �
 VAPID_PUBLIC_KEY=<public key>
 VAPID_PRIVATE_KEY=<private key>
 VAPID_SUBJECT=mailto:owner@example.com
-PUSH_REDIS_URL=<persistent Redis REST endpoint>
-PUSH_REDIS_TOKEN=<Redis bearer token>
+VALKEY_URL=<persistent redis://, rediss:// 또는 valkey:// endpoint>
 CRON_SECRET=<Vercel Pro 또는 외부 scheduler secret>
 PUSH_SCHEDULER_MODE=external
 PUSH_MAX_SUBSCRIPTIONS=5000
@@ -102,13 +131,19 @@ PUSH_DISPATCH_LEASE_SECONDS=90
 PUSH_DELIVERY_CLAIM_SECONDS=90
 ```
 
+`VALKEY_URL`/`REDIS_URL`이 있으면 Web Push도 실시간 캐시와 동일한 Bun native
+Valkey connection을 사용합니다. 기존 배포 호환을 위해 `PUSH_REDIS_URL` +
+`PUSH_REDIS_TOKEN` REST adapter도 fallback으로 남아 있지만 신규 배포에서는 native
+Valkey 구성을 권장합니다. native URL은 인증정보를 URL 자체에 포함할 수 있으므로
+응답·로그·커밋에 connection URL 전체를 절대 기록하지 마십시오. legacy REST
+fallback을 사용할 때도 `PUSH_REDIS_TOKEN`은 응답·로그·커밋에 포함하지 않습니다.
+
 VAPID public key는 canonical base64url 65바이트 uncompressed P-256(첫 byte
 `0x04`), private key는 32바이트여야 하며 subject는 `mailto:` 또는 `https:` URI여야
-합니다. 형식이 하나라도 틀리면 capability는 false입니다.
-`VAPID_PRIVATE_KEY`와 `PUSH_REDIS_TOKEN`은 응답·로그·커밋에 절대 포함하지
-않습니다. 개발 환경은 `.push-subscriptions.json` durable store를 사용하고,
-Production은 Redis REST adapter가 없으면 capability를 비활성화합니다.
-`PUSH_REDIS_URL`은 credential과 fragment가 없는 parse 가능한 `https://` URL이어야
+합니다. 형식이 하나라도 틀리면 capability는 false입니다. 개발 환경에서 외부 Valkey를
+설정하지 않으면 `.push-subscriptions.json` durable store를 사용합니다. Production은
+native Valkey/Redis 또는 legacy Redis REST adapter가 없으면 capability를 비활성화합니다.
+legacy `PUSH_REDIS_URL`은 credential과 fragment가 없는 parse 가능한 `https://` URL이어야
 합니다. HTTP, credential 포함, malformed URL은 저장소를 만들기 전에 거부하므로
 해당 주소로 `PUSH_REDIS_TOKEN`이 전송되지 않습니다.
 `/api/push/test`는 개발 환경에서만 `PUSH_TEST_ENABLED=1`과
@@ -122,7 +157,7 @@ Pro/외부 scheduler에서는 1분 이상 주기로 해당 GET을 호출하고, 
 함께 설정할 때만 프로세스 내 interval이 활성화됩니다. `PUSH_DISPATCH_BATCH_SIZE`
 와 `PUSH_DISPATCH_CONCURRENCY`로 호출당 평가량과 동시성을 제한합니다. Vercel에서는
 프로세스 상주 interval을 capability로 광고하거나 시작하지 않으며 external mode만
-사용합니다. Redis의 영속 HSCAN cursor가 호출마다 다음 batch로 이동하고,
+사용합니다. Valkey/Redis의 영속 HSCAN cursor가 호출마다 다음 batch로 이동하고,
 `SET NX EX` dispatch lease(최소 90초)와 token 비교 해제가 cron 중첩 발송을 막습니다.
 각 alert는 ETA 계산 후 현재 ID를 원자적으로 다시 확인하고 endpoint별 claim을
 획득한 뒤에만 발송합니다. claim 중 교체 요청은 409로 재시도하게 하며,
