@@ -39,7 +39,11 @@ export class ApiClient {
   }
 
   async get<T extends ApiEnvelope>(url: string, timeoutMs = this.defaultTimeoutMs): Promise<T> {
-    return this.request<T>(url, { cache: "no-store" }, timeoutMs);
+    const payload = await this.request<T>(url, { cache: "no-store" }, timeoutMs);
+    if (url === "/api/push/public-key" && payload.capable === false && typeof payload.configuration_message === "string") {
+      throw new ApiError(payload.configuration_message, 200, payload);
+    }
+    return payload;
   }
 
   async post<T extends ApiEnvelope>(url: string, body: unknown, timeoutMs = this.defaultTimeoutMs): Promise<T> {
