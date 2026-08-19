@@ -2,6 +2,10 @@ import { expect, test } from "bun:test";
 import { calculateAutoRoute } from "../../src/engine/index";
 
 const offlineFetch = async (): Promise<Response> => new Response("offline", { status: 503 });
+// These are end-to-end route correctness regressions, not a latency SLO. The
+// heaviest GTX/ordinary-network candidate search can sit around Bun's default
+// 5s timeout on shared CI runners, so give the correctness assertion headroom.
+const ROUTE_REGRESSION_TIMEOUT_MS = 10_000;
 
 for (const [from, to] of [["대곡", "수서"], ["별내", "신내"]] as const) {
   test(`reported route ${from} → ${to} calculates without a server exception`, async () => {
@@ -16,5 +20,5 @@ for (const [from, to] of [["대곡", "수서"], ["별내", "신내"]] as const) 
     expect(result.to).toBe(to);
     expect(Array.isArray(result.segments)).toBe(true);
     expect((result.segments as unknown[]).length).toBeGreaterThan(0);
-  });
+  }, ROUTE_REGRESSION_TIMEOUT_MS);
 }
