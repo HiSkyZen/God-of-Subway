@@ -2,6 +2,7 @@ import { afterEach, expect, test } from "bun:test";
 import {
   cacheReleaseRefreshLease,
   cacheSetJson,
+  cacheSnapshot,
   cacheTryRefreshLease,
   resetCacheStateForTests,
 } from "../../src/infra/cache";
@@ -33,6 +34,48 @@ test("cache writes value and TTL atomically with SET EX", async () => {
   expect(commands[0][0]).toBe("SET");
   expect(commands[0][1]).toContain("realtime-source:1002");
   expect(commands[0].slice(3)).toEqual(["EX", "90"]);
+});
+
+test("cache normalizes non-finite TTLs before issuing Valkey commands", async () => {
+  const commands: string[][] = [];
+  setValkeyTransportForTests({
+    command: async <T>(args: readonly string[]): Promise<T> => {
+      commands.push([...args]);
+      return "OK" as T;
+    },
+  });
+
+  await cacheSetJson("realtime-source:bad-ttl", { rows: 1 }, Number.NaN, Number.POSITIVE_INFINITY);
+  const lease = await cacheTryRefreshLease("realtime-source:bad-ttl", Number.NaN);
+
+  expect(commands[0].slice(-2)).toEqual(["EX", "1"]);
+  const envelope = JSON.parse(commands[0][2]) as { freshUntil: number; staleUntil: number };
+  expect(Number.isFinite(envelope.freshUntil)).toBe(true);
+  expect(Number.isFinite(envelope.staleUntil)).toBe(true);
+  expect(lease.configured).toBe(true);
+  expect(lease.token).toBeTruthy();
+  expect(commands[1].slice(-3)).toEqual(["NX", "EX", "5"]);
+  expect(commands.flat()).not.toContain("NaN");
+  expect(commands.flat()).not.toContain("Infinity");
+});
+
+test("cache health never exposes raw Valkey client error messages", async () => {
+  setValkeyTransportForTests({
+    command: async <T>(): Promise<T> => {
+      const error = Object.assign(
+        new Error("connect rediss://default:super-secret@cache.example:6379/0 failed"),
+        { code: "ECONNREFUSED" },
+      );
+      throw error;
+    },
+  });
+
+  await cacheSetJson("realtime-source:error", { rows: 1 }, 12, 90);
+  const snapshot = cacheSnapshot();
+
+  expect(snapshot.last_redis_error).toBe("Error (ECONNREFUSED)");
+  expect(JSON.stringify(snapshot)).not.toContain("super-secret");
+  expect(JSON.stringify(snapshot)).not.toContain("cache.example");
 });
 
 test("refresh lease uses SET NX EX and compare-delete release", async () => {
