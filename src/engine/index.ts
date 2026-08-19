@@ -2,8 +2,9 @@ import { DATASET_METADATA } from "./data-metadata";
 import { apiKeyConfigured, fetchPosition, healthRealtimeSnapshot, prefetchPositionCache, cachedPositionRows, publicTrainNumber, type FetchLike } from "./realtime-service";
 import { calculateLiveTrip as calculateLiveTripImpl, calculateRoute as calculateRouteImpl } from "./eta-service";
 import { calculateGtxHybridAuto, calculateGtxHybridRoute, calculateGtxHybridTrip, GTX_LINES, isGtxLine } from "./gtx-service";
-import { nowKst, resolveServiceMode, holidayInfo, stationOptions, formatKst } from "./timetable-service";
+import { nowKst, resolveServiceMode, holidayInfo, stationOptions, formatKst, canonStation } from "./timetable-service";
 import { stationSelector } from "./routing-service";
+import { DISJOINT_HOMONYM_STATIONS } from "./station-identity";
 import { cacheSnapshot } from "../infra/cache";
 import { debugEnabled } from "../infra/observability";
 import type { AutoRoutePayload, CalculateRoutePayload, LiveTripPayload, PositionCache, Serialized } from "../types/domain";
@@ -126,8 +127,20 @@ export function healthSnapshot(): Record<string, unknown> {
   };
 }
 
-export const stationsByLine: Record<string, string[]> = {
-  ...stationOptions(),
-  ...Object.fromEntries(Object.entries(GTX_LINES).map(([line, cfg]) => [line, [...cfg.stations]])),
-};
+function publicStationOptions(): Record<string, string[]> {
+  const result: Record<string, string[]> = {
+    ...stationOptions(),
+    ...Object.fromEntries(Object.entries(GTX_LINES).map(([line, cfg]) => [line, [...cfg.stations]])),
+  };
+  for (const entry of DISJOINT_HOMONYM_STATIONS) {
+    for (const line of entry.lines) {
+      const stations = result[line] ?? [];
+      if (!stations.some((station) => canonStation(station) === canonStation(entry.station))) stations.push(entry.station);
+      result[line] = stations.sort((a, b) => a.localeCompare(b, "ko"));
+    }
+  }
+  return result;
+}
+
+export const stationsByLine: Record<string, string[]> = publicStationOptions();
 export const API_KEY_CONFIGURED = apiKeyConfigured;
