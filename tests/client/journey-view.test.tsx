@@ -56,11 +56,26 @@ test("journey timeline renders useful transfer details without direction noise",
   expect(html).toContain("최종 목적지");
 });
 
-test("GTX route exposes a one-click exclusion rerun", () => {
-  const gtx: RouteSegment[] = [{ line: "GTX-A(북부)", from: "연신내", to: "서울역", train_no: "A101", board_dt: "2026-08-18 23:45:00", alight_dt: "2026-08-18 23:51:00" }];
+test("GTX route exposes a one-click exclusion rerun when an ordinary route is possible", () => {
+  const gtx: RouteSegment[] = [{ line: "GTX-A(북부)", from: "연신내", to: "서울역", train_no: "X1009", tracking_id: "1009", board_dt: "2026-08-18 23:45:00", alight_dt: "2026-08-18 23:51:00" }];
   const gtxResult: AutoRouteResponse = { ok: true, from: "연신내", to: "서울역", arrival_time: "2026-08-18 23:51:00", segments: gtx };
   const html = renderToStaticMarkup(<UpstreamJourneyView result={gtxResult} segments={gtx} arrivalTime={gtxResult.arrival_time} totalSeconds={360} activeIndex={0} liveTrip={null} onBoard={() => undefined} onRefresh={() => undefined} onExcludeGtx={() => undefined} />);
   expect(html).toContain("GTX-A 제외하기");
+});
+
+test("GTX-exclusive endpoints never offer an impossible GTX exclusion", () => {
+  const gtx: RouteSegment[] = [{ line: "GTX-A(북부)", from: "운정중앙", to: "서울역", train_no: "X1011", tracking_id: "1011", board_dt: "2026-08-18 23:45:00", alight_dt: "2026-08-18 23:57:00" }];
+  const gtxResult: AutoRouteResponse = { ok: true, from: "운정중앙", to: "서울역", arrival_time: "2026-08-18 23:57:00", segments: gtx };
+  const html = renderToStaticMarkup(<UpstreamJourneyView result={gtxResult} segments={gtx} arrivalTime={gtxResult.arrival_time} totalSeconds={720} activeIndex={0} liveTrip={null} onBoard={() => undefined} onRefresh={() => undefined} onExcludeGtx={() => undefined} />);
+  expect(html).not.toContain("GTX-A 제외하기");
+});
+
+test("public train number is shown without leaking the Shinbundang timetable id", () => {
+  const sb: RouteSegment[] = [{ line: "신분당선", from: "강남", to: "판교", train_no: "D007", tracking_id: "SB-W-0042", board_dt: "2026-08-18 10:00:00", alight_dt: "2026-08-18 10:15:00" }];
+  const sbResult: AutoRouteResponse = { ok: true, from: "강남", to: "판교", arrival_time: "2026-08-18 10:15:00", segments: sb };
+  const html = renderToStaticMarkup(<UpstreamJourneyView result={sbResult} segments={sb} arrivalTime={sbResult.arrival_time} totalSeconds={900} activeIndex={0} liveTrip={null} onBoard={() => undefined} onRefresh={() => undefined} onExcludeGtx={() => undefined} />);
+  expect(html).toContain("D007열차");
+  expect(html).not.toContain("SB-W-0042");
 });
 
 test("app source keeps time controls, tracking guard, theme, favorites, and opt-in experiment panel", async () => {
