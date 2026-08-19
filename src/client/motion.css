@@ -1,0 +1,30 @@
+/* Motion layer: restrained, state-driven animation without changing the upstream-aligned layout. */
+:root{--motion-fast:140ms;--motion-base:220ms;--motion-slow:360ms;--motion-ease:cubic-bezier(.22,.61,.36,1);--motion-pop:cubic-bezier(.2,.85,.25,1.15)}
+button,a,input,select,.station-control,.favorite-card,.ride-card,.transfer-block,.route-overview,.settings-panel,.live-panel,.experiment-panel{transition-property:background-color,border-color,color,box-shadow,opacity,transform;transition-duration:var(--motion-base);transition-timing-function:var(--motion-ease)}
+button:not(:disabled):active{transform:translateY(1px) scale(.985)}
+.header-button,.primary-button,.secondary-button,.search-button,.time-strip button,.bottom-actions button,.train-choice{will-change:transform}
+.header-button:not(:disabled):hover,.primary-button:not(:disabled):hover,.secondary-button:not(:disabled):hover,.bottom-actions button:not(:disabled):hover,.train-choice:not(:disabled):hover{transform:translateY(-1px)}
+.search-card,.route-overview,.route-timeline,.favorites-panel,.settings-panel,.live-panel,.experiment-panel,.error-banner,.empty-state{animation:surface-enter var(--motion-slow) var(--motion-ease) both}
+.route-timeline .timeline-section{animation:timeline-enter var(--motion-slow) var(--motion-ease) both}.route-timeline .timeline-section:nth-child(2){animation-delay:35ms}.route-timeline .timeline-section:nth-child(3){animation-delay:70ms}.route-timeline .timeline-section:nth-child(4){animation-delay:105ms}.route-timeline .timeline-section:nth-child(5){animation-delay:140ms}
+.suggestions{transform-origin:top center;animation:suggestion-open var(--motion-base) var(--motion-pop) both;overflow:hidden}
+.suggestions button{transition:background-color var(--motion-fast) ease,color var(--motion-fast) ease,transform var(--motion-fast) ease}.suggestions button:hover,.suggestions button.active{transform:translateX(3px)}
+.station-control:focus-within{transform:translateY(-1px)}
+.swap-button:not(:disabled):hover{transform:rotate(180deg)!important}.swap-button:not(:disabled):active{transform:rotate(180deg) scale(.96)!important}
+.toast,.update-toast{animation:toast-enter var(--motion-base) var(--motion-pop) both}
+.sheet-backdrop{animation:fade-in var(--motion-base) ease both}.push-sheet{animation:sheet-enter var(--motion-slow) var(--motion-ease) both}
+.train-choice-panel,.route-alternatives>div{animation:expand-enter var(--motion-base) var(--motion-ease) both;transform-origin:top}
+.timeline-section.current .ride-card{animation:current-pulse 2.8s ease-in-out infinite}
+.transfer-block.same-platform{border-color:rgba(8,116,81,.28);background:var(--greenbg)}
+.transfer-mode-badge,.crowding-badge{display:inline-flex;align-items:center;width:max-content;border-radius:999px;padding:3px 7px;font-size:10px;font-weight:900;line-height:1.25;white-space:nowrap}
+.transfer-mode-badge{margin-left:6px;border:1px solid rgba(8,116,81,.25);background:var(--greenbg);color:var(--green)}
+.crowding-badge{margin-left:8px;border:1px solid rgba(228,154,25,.28);background:var(--amberbg);color:var(--amber)}
+@keyframes surface-enter{from{opacity:0;transform:translateY(8px)}to{opacity:1;transform:none}}
+@keyframes timeline-enter{from{opacity:0;transform:translateY(10px)}to{opacity:1;transform:none}}
+@keyframes suggestion-open{from{opacity:0;transform:translateY(-4px) scaleY(.96)}to{opacity:1;transform:none}}
+@keyframes toast-enter{from{opacity:0;transform:translate(-50%,8px) scale(.98)}to{opacity:1;transform:translate(-50%,0) scale(1)}}
+@keyframes fade-in{from{opacity:0}to{opacity:1}}
+@keyframes sheet-enter{from{opacity:0;transform:translateY(18px) scale(.985)}to{opacity:1;transform:none}}
+@keyframes expand-enter{from{opacity:0;transform:translateY(-4px) scaleY(.97)}to{opacity:1;transform:none}}
+@keyframes current-pulse{0%,100%{box-shadow:0 0 0 3px var(--bluebg)}50%{box-shadow:0 0 0 5px var(--bluebg)}}
+@media(max-width:620px){.push-sheet{animation-name:mobile-sheet-enter}@keyframes mobile-sheet-enter{from{opacity:0;transform:translateY(28px)}to{opacity:1;transform:none}}}
+@media(prefers-reduced-motion:reduce){*,*::before,*::after{animation-duration:.001ms!important;animation-iteration-count:1!important;scroll-behavior:auto!important;transition-duration:.001ms!important}.timeline-section.current .ride-card{animation:none!important}}

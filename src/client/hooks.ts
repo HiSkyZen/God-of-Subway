@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { stationMatches } from "./pure";
+import { stationSuggestionOptions } from "./station-suggestions";
 
 export function useClock(intervalMs = 60_000): Date {
   const [now, setNow] = useState(() => new Date());
@@ -22,11 +22,10 @@ export function useToast(durationMs = 2_600): readonly [string, (message: string
   return [message, notify] as const;
 }
 
+/** Keep line identity in the visible value so names such as 신촌/양평 are never collapsed. */
 export function useStationSuggestions(stations: Record<string, string[]>, from: string, to: string, active: "from" | "to" | null): string[] {
-  const allStations = useMemo(() => [...new Set(Object.values(stations).flat())].sort((a, b) => a.length - b.length || a.localeCompare(b, "ko")), [stations]);
   return useMemo(() => {
-    const query = active === "from" ? from : to;
-    return query.trim() ? allStations.filter((name) => stationMatches(name, query)).slice(0, 8) : [];
-  }, [active, allStations, from, to]);
+    const query = active === "from" ? from : active === "to" ? to : "";
+    return stationSuggestionOptions(stations, query).map((candidate) => candidate.label);
+  }, [active, from, stations, to]);
 }
-

@@ -3,6 +3,7 @@ import { apiKeyConfigured, fetchPosition, healthRealtimeSnapshot, prefetchPositi
 import { calculateLiveTrip as calculateLiveTripImpl, calculateRoute as calculateRouteImpl } from "./eta-service";
 import { calculateGtxHybridAuto, calculateGtxHybridRoute, calculateGtxHybridTrip, GTX_LINES, isGtxLine } from "./gtx-service";
 import { nowKst, resolveServiceMode, holidayInfo, stationOptions, formatKst } from "./timetable-service";
+import { stationSelector } from "./routing-service";
 import { cacheSnapshot } from "../infra/cache";
 import { debugEnabled } from "../infra/observability";
 import type { AutoRoutePayload, CalculateRoutePayload, LiveTripPayload, PositionCache, Serialized } from "../types/domain";
@@ -11,6 +12,11 @@ export type { AutoRoutePayload, CalculateRoutePayload, LiveTripPayload, Position
 export { nowKst, formatKst, fetchPosition, prefetchPositionCache, cachedPositionRows };
 
 const isRecord = (value: unknown): value is Record<string, unknown> => typeof value === "object" && value !== null && !Array.isArray(value);
+
+function publicStationName(value: unknown): unknown {
+  if (typeof value !== "string") return value;
+  return stationSelector(value).station || value;
+}
 
 function publicizeSegment(value: Record<string, unknown>, inheritedLine = ""): Record<string, unknown> {
   const line = String(value.line ?? inheritedLine);
@@ -27,6 +33,8 @@ function publicizeSegment(value: Record<string, unknown>, inheritedLine = ""): R
 
 function publicizeResult(value: Serialized): Serialized {
   const result: Serialized = { ...value };
+  if ("from" in result) result.from = publicStationName(result.from);
+  if ("to" in result) result.to = publicStationName(result.to);
   if (Array.isArray(value.segments)) result.segments = value.segments.map((segment) => isRecord(segment) ? publicizeSegment(segment) : segment);
   if (Array.isArray(value.alternatives)) {
     result.alternatives = value.alternatives.map((alternative) => {
@@ -99,8 +107,8 @@ export function healthSnapshot(): Record<string, unknown> {
   for (const [line, counts] of Object.entries(DATASET_METADATA.extra)) extra[line] = { weekday_trains: counts.weekday, holiday_trains: counts.holiday };
   return {
     ok: true,
-    version: "V14.2.0-bun",
-    upstream_parity: "V13.4.8",
+    version: "V14.3.0-bun",
+    upstream_parity: "V13.5.4-transfer",
     today_service_mode: mode,
     today_service_reason: reason,
     today_is_holiday: Boolean(holiday),
@@ -113,6 +121,7 @@ export function healthSnapshot(): Record<string, unknown> {
     cache: cacheSnapshot(),
     debug_enabled: debugEnabled(),
     station_line_count: Object.keys(stationsByLine).length,
+    transfer_policy: { upstream: "V13.5.4", runtime_missing_duration: 0, crowding_cap: 1.75, homonym_line_selection: true },
     gtx_a: { mode: "integrated-route-graph", sections: Object.fromEntries(Object.entries(GTX_LINES).map(([line, cfg]) => [line, cfg.stations])) },
   };
 }

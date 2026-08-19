@@ -32,7 +32,23 @@ export interface Candidate {
   location_kind: "live" | "expected"; location_label: string; confidence: "높음" | "중간" | "낮음";
   method: string; projected: boolean; [key: string]: unknown;
 }
-export interface TransferInfo { station: string; seconds: number; distance_m: number | null; alight_position: string; board_position: string; from_direction: string; to_direction: string; matched: string; }
+export interface TransferInfo {
+  station: string;
+  seconds: number;
+  base_seconds?: number;
+  distance_m: number | null;
+  alight_position: string;
+  board_position: string;
+  from_direction: string;
+  to_direction: string;
+  matched: string;
+  mode?: "walk" | "same-platform" | "cross-platform" | "passage" | "branch" | "estimated";
+  source?: string;
+  note?: string;
+  crowding_multiplier?: number;
+  crowding_level?: string;
+  predicted_load?: number;
+}
 export interface PathEdge { from: [string, string]; to: [string, string]; kind: "ride" | "transfer" | "start" | "end"; weight: number; }
 export interface Path { start: string; end: string; seconds: number; edges: PathEdge[]; }
 export interface Diagnostics { positions: number; matched: number; unmatched_train: string[]; unmatched_station: string[]; matched_context?: number; realtime_available?: boolean; realtime_error?: string; realtime_query?: string; cache_state?: string; [key: string]: unknown; }
