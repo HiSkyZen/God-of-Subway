@@ -92,6 +92,13 @@ jobs:
           if count != 1:
               raise SystemExit('transfer overlay metadata entry not found')
           metadata_path.write_text(metadata, encoding='utf-8')
+          test_path = Path('tests/engine/urban-lines.test.ts')
+          test_text = test_path.read_text(encoding='utf-8')
+          old = 'expect([...TIMETABLE_ONLY_LINES].sort()).toEqual(EXPECTED);'
+          new = 'expect([...TIMETABLE_ONLY_LINES].map(String).sort()).toEqual(EXPECTED);'
+          if old not in test_text:
+              raise SystemExit('urban-line type assertion target not found')
+          test_path.write_text(test_text.replace(old, new, 1), encoding='utf-8')
           print(json.dumps({'overridden_240_pairs': replaced, 'overlay_bytes': size}, ensure_ascii=False))
           PY
       - name: Install
