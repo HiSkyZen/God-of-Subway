@@ -4,8 +4,8 @@ import { calculateAutoRoute } from "../../src/engine/index";
 const previousKey = Bun.env.SEOUL_API_KEY;
 const emptyRealtime = async (): Promise<Response> => new Response(JSON.stringify({ realtimePositionList: [] }));
 const gtxRealtime = async (): Promise<Response> => new Response(JSON.stringify({ realtimePositionList: [
-  { subwayId: "1032", trainNo: "A101", statnNm: "운정중앙", statnTnm: "서울역", updnLine: "1", trainSttus: "2", recptnDt: "2026-08-18 10:00:00" },
-  { subwayId: "1032", trainNo: "A201", statnNm: "수서", statnTnm: "동탄", updnLine: "1", trainSttus: "2", recptnDt: "2026-08-18 10:00:00" },
+  { subwayId: "1032", trainNo: "1009", statnNm: "운정중앙", statnTnm: "서울역", updnLine: "1", trainSttus: "2", recptnDt: "2026-08-18 10:00:00" },
+  { subwayId: "1032", trainNo: "1232", statnNm: "수서", statnTnm: "동탄", updnLine: "1", trainSttus: "2", recptnDt: "2026-08-18 10:00:00" },
 ] }));
 
 beforeEach(() => { Bun.env.SEOUL_API_KEY = "test"; });
@@ -56,7 +56,7 @@ describe("GTX-A integrated automatic routing", () => {
     expect(result.ok).toBe(true);
     const segments = result.segments as Array<Record<string, unknown>>;
     expect(segments.length).toBeGreaterThan(1);
-    expect(segments[0]).toMatchObject({ line: "GTX-A(북부)", from: "운정중앙", train_no: "A101", confidence: "높음" });
+    expect(segments[0]).toMatchObject({ line: "GTX-A(북부)", from: "운정중앙", train_no: "X1009", tracking_id: "1009", confidence: "높음" });
     expect(segments.at(-1)?.to).toBe("강남");
   });
 
@@ -65,8 +65,10 @@ describe("GTX-A integrated automatic routing", () => {
     expect(result.ok).toBe(true);
     const segments = result.segments as Array<Record<string, unknown>>;
     expect(segments.length).toBeGreaterThan(1);
-    expect(segments.at(-1)).toMatchObject({ line: "GTX-A(남부)", to: "동탄" });
-    expect(String(segments.at(-1)?.train_no || "")).not.toBe("");
+    const last = segments.at(-1);
+    expect(last).toMatchObject({ line: "GTX-A(남부)", to: "동탄" });
+    expect(String(last?.tracking_id || "")).not.toBe("");
+    if (String(last?.train_no || "")) expect(String(last?.train_no)).toMatch(/^X\d{4}$/);
   });
 
   test("exclude_gtx reruns through the ordinary network", async () => {
