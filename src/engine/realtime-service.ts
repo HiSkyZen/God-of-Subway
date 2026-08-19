@@ -16,6 +16,29 @@ const LINE_IDS: Record<string, string> = {
 };
 const GTX_NORTH = new Set(["운정중앙", "킨텍스", "대곡", "연신내", "서울역"]);
 const GTX_SOUTH = new Set(["수서", "성남", "구성", "동탄"]);
+const sinbundangFormationByScheduleId = new Map<string, string>();
+
+function digitsOnly(value: unknown): string { return String(value ?? "").replace(/\D/g, ""); }
+/** Seoul's Shinbundang trainNo is a formation number (1~20), not a timetable train number. */
+export function formatSinbundangFormationNumber(value: unknown): string {
+  const digits = digitsOnly(value); if (!digits) return "";
+  return `D0${digits.slice(-2).padStart(2, "0")}`;
+}
+/** Rail.Blue exposes GTX-A service numbers with an X prefix and four digits. */
+export function formatGtxTrainNumber(value: unknown): string {
+  const raw = String(value ?? "").trim().toUpperCase();
+  if (!raw || /^(GTXN|GTXS|GTX-SCHED|GTX_INTERNAL)/.test(raw)) return "";
+  const digits = digitsOnly(raw); if (!digits) return "";
+  return `X${digits.slice(-4).padStart(4, "0")}`;
+}
+/** Convert an engine tracking id to the public-facing train number, if known. */
+export function publicTrainNumber(line: string, trackingId: unknown): string {
+  const id = String(trackingId ?? "").trim();
+  if (!id) return "";
+  if (line === "신분당선") return sinbundangFormationByScheduleId.get(id) ?? "";
+  if (line.startsWith("GTX-A")) return formatGtxTrainNumber(id);
+  return id;
+}
 
 function apiKey(): string { const value = Bun.env.SEOUL_API_KEY?.trim() ?? ""; if (!value) throw new Error("SEOUL_API_KEY 환경변수가 설정되지 않았습니다."); return value; }
 function cacheGet(cache: PositionCache, line: string): PositionCacheEntry | PositionRow[] | undefined { return cache instanceof Map ? cache.get(line) : cache[line]; }
@@ -50,7 +73,18 @@ function matchSinbundangRow(row: PositionRow): PositionRow {
     if (!best || score < best.score) best = { train, score };
   }
   if (!best || best.score > 3600) return row;
-  return { ...row, _jigeumta_raw_train_no: row.trainNo ?? row.btrainNo ?? "", trainNo: best.train.train_no, _jigeumta_context_match_score: best.score };
+  const apiFormation = String(row.trainNo ?? row.btrainNo ?? "").trim();
+  const displayTrainNo = formatSinbundangFormationNumber(apiFormation);
+  if (displayTrainNo) sinbundangFormationByScheduleId.set(best.train.train_no, displayTrainNo);
+  return {
+    ...row,
+    _jigeumta_raw_train_no: apiFormation,
+    _jigeumta_api_train_no: apiFormation,
+    _jigeumta_display_train_no: displayTrainNo,
+    _jigeumta_schedule_id: best.train.train_no,
+    trainNo: best.train.train_no,
+    _jigeumta_context_match_score: best.score,
+  };
 }
 function normalizeRows(line: string, rows: PositionRow[]): PositionRow[] { const filtered = filteredRows(line, rows); return line === "신분당선" ? filtered.map(matchSinbundangRow) : filtered; }
 
@@ -66,7 +100,7 @@ export async function fetchPosition(line: string, timeout = 5, fetchImpl: FetchL
       const rows = normalizeRows(line, Array.isArray(data.realtimePositionList) ? data.realtimePositionList : []); if (!rows.length && queries(line).length > 1) { lastError = `${query}: 0 rows`; continue; }
       const envelope: RealtimeEnvelope = { ...data, realtimePositionList: rows, _jigeumta_query: query, _jigeumta_cache_state: "miss" };
       if (persistent) await cacheSetJson(cacheKey, envelope, Number(Bun.env.REALTIME_CACHE_TTL_SECONDS || 12), Number(Bun.env.REALTIME_STALE_TTL_SECONDS || 90));
-      const contextMatched = rows.filter((row) => row._jigeumta_raw_train_no !== undefined).length;
+      const contextMatched = rows.filter((row) => row._jigeumta_schedule_id !== undefined).length;
       logEvent("info", "realtime_fetch", { line, query, rows: rows.length, context_matched: contextMatched, status: response.status, duration_ms: Math.round(performance.now() - started) });
       return { ok: response.ok, error: response.ok ? null : `${response.status} ${response.statusText}`, data: envelope };
     } catch (error) { lastError = error instanceof Error ? `${error.name}: ${error.message}` : String(error); logEvent("warn", "realtime_fetch_failure", { line, query, error: lastError, duration_ms: Math.round(performance.now() - started) }); }
@@ -86,5 +120,5 @@ export async function cachedPositionRows(line: string, cache: PositionCache, tim
   if (Array.isArray(value)) return { rows: value, error: "", available: true }; return { rows: value.rows ?? [], error: value.error ?? "", available: Boolean(value.available), query: value.query, cache_state: value.cache_state };
 }
 export function apiKeyConfigured(): boolean { return Boolean(Bun.env.SEOUL_API_KEY?.trim()); }
-export function healthRealtimeSnapshot(): Record<string, unknown> { return { configured: apiKeyConfigured(), baseUrl: SEOUL_REALTIME_BASE, query_aliases: REALTIME_QUERY_ALIASES, line_ids: LINE_IDS, sinbundang_train_number_policy: "ignore_api_train_number_context_match" }; }
+export function healthRealtimeSnapshot(): Record<string, unknown> { return { configured: apiKeyConfigured(), baseUrl: SEOUL_REALTIME_BASE, query_aliases: REALTIME_QUERY_ALIASES, line_ids: LINE_IDS, sinbundang_train_number_policy: "timetable_internal_index_api_formation_display" }; }
 export { nowKst, parseDt };
