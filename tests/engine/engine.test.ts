@@ -82,10 +82,14 @@ describe("지금타 Bun engine", () => {
       .filter((train) => train.stops.some((stop) => canonStation(stop.station) === "종로3가"));
     const groups = new Map<string, Train[]>();
     for (const train of all) groups.set(train.direction, [...(groups.get(train.direction) ?? []), train]);
-    const trains = [...groups.values()].sort((a, b) => b.length - a.length)[0]?.sort((a, b) => firstTimed(a) - firstTimed(b)) ?? [];
-    expect(trains.length).toBeGreaterThan(3);
-    const trio = trains.slice(0, 3);
+    const ordered = [...groups.values()].sort((a, b) => b.length - a.length)[0]?.sort((a, b) => firstTimed(a) - firstTimed(b)) ?? [];
+    const distinct = ordered.filter((train, index, values) => index === 0 || firstTimed(train) !== firstTimed(values[index - 1]));
+    expect(distinct.length).toBeGreaterThan(3);
+    const center = Math.max(1, Math.min(distinct.length - 2, Math.floor(distinct.length / 2)));
+    const trio = [distinct[center - 1], distinct[center], distinct[center + 1]];
     expect(new Set(trio.map((train) => train.direction)).size).toBe(1);
+    expect(firstTimed(trio[0])).toBeLessThan(firstTimed(trio[1]));
+    expect(firstTimed(trio[1])).toBeLessThan(firstTimed(trio[2]));
     const rows = trio.map((train, index) => {
       const stop = train.stops.find((item) => canonStation(item.station) === "종로3가");
       const ref = stop?.dep ?? stop?.arr;
