@@ -25,15 +25,14 @@ test("public push capability reports missing VAPID and storage separately", asyn
   Bun.env.NODE_ENV = "production";
   const response = handlePushPublicKey();
   const body = await bodyOf(response);
-  expect(response.status).toBe(503);
+  expect(response.status).toBe(200);
   expect(body).toMatchObject({
-    ok: false,
+    ok: true,
     capable: false,
-    code: "push_configuration_incomplete",
     configuration_issues: ["vapid_unavailable", "storage_unavailable", "scheduler_unavailable"],
   });
-  expect(String(body.error)).toContain("VAPID");
-  expect(String(body.error)).toContain("Valkey/Redis");
+  expect(String(body.configuration_message)).toContain("VAPID");
+  expect(String(body.configuration_message)).toContain("Valkey/Redis");
 });
 
 test("public push capability identifies a missing persistent store", async () => {
@@ -41,13 +40,13 @@ test("public push capability identifies a missing persistent store", async () =>
   setVapid();
   const response = handlePushPublicKey();
   const body = await bodyOf(response);
-  expect(response.status).toBe(503);
+  expect(response.status).toBe(200);
   expect(body).toMatchObject({
-    ok: false,
+    ok: true,
     capable: false,
     configuration_issues: ["storage_unavailable", "scheduler_unavailable"],
   });
-  expect(String(body.error)).toContain("Valkey/Redis");
+  expect(String(body.configuration_message)).toContain("Valkey/Redis");
 });
 
 test("subscription capability remains available when only the scheduler is absent", async () => {
@@ -64,6 +63,7 @@ test("subscription capability remains available when only the scheduler is absen
     arrival_alert_capable: false,
     scheduler_mode: null,
     configuration_issues: ["scheduler_unavailable"],
+    configuration_message: null,
   });
   expect(typeof body.public_key).toBe("string");
 });
@@ -81,5 +81,6 @@ test("external scheduler completes arrival-alert capability", async () => {
     arrival_alert_capable: true,
     scheduler_mode: "external",
     configuration_issues: [],
+    configuration_message: null,
   });
 });
