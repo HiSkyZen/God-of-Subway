@@ -2,7 +2,7 @@ import { useState } from "react";
 import type { ReactElement } from "react";
 import type { AutoRouteResponse, LiveTripState, RouteSegment } from "./contract";
 import { useClock } from "./hooks";
-import { formatDuration } from "./pure";
+import { formatDuration, parseLocalDateTime } from "./pure";
 
 const GTX_EXCLUSIVE_STATIONS = new Set(["운정중앙", "킨텍스", "동탄"]);
 
@@ -12,10 +12,19 @@ function clock(value?: string | null): string {
   return match ? `${match[1]}:${match[2]}` : String(value);
 }
 
-function timestamp(value?: string | null): number | null {
+/** Backend formatKst() strings are KST wall-clock values, not browser-local time. */
+export function routeTimestamp(value?: string | null): number | null {
   if (!value) return null;
-  const parsed = new Date(String(value).replace(" ", "T")).getTime();
+  const text = String(value).trim();
+  const normalized = /^\d{4}-\d{2}-\d{2}[ T]\d{2}:\d{2}:\d{2}$/.test(text)
+    ? `${text.replace(" ", "T")}+09:00`
+    : text;
+  const parsed = new Date(normalized).getTime();
   return Number.isFinite(parsed) ? parsed : null;
+}
+
+function localTimestamp(value?: string | null): number | null {
+  return parseLocalDateTime(value)?.getTime() ?? null;
 }
 
 function lineClass(line: string): string { return line.replace(/[^0-9A-Za-z가-힣]/g, ""); }
@@ -75,8 +84,8 @@ function delayText(value: unknown): string {
   return `+${Math.max(1, Math.round(parsed / 60))}분`;
 }
 function progress(startValue: string | undefined, endValue: string | undefined, now: number): number {
-  const start = timestamp(startValue);
-  const end = timestamp(endValue);
+  const start = routeTimestamp(startValue);
+  const end = routeTimestamp(endValue);
   if (start === null || end === null || end <= start) return 0;
   return Math.max(0, Math.min(100, ((now - start) / (end - start)) * 100));
 }
@@ -141,7 +150,7 @@ export function UpstreamJourneyView({
         const candidates = alternateCandidates(segment);
         const choosing = candidateIndex === index;
         const totalTransfer = transferSeconds(segment);
-        const transferEnd = activeTransfer ? timestamp(liveTrip?.transferEndsAt) : null;
+        const transferEnd = activeTransfer ? localTimestamp(liveTrip?.transferEndsAt) : null;
         const transferRemaining = transferEnd === null ? totalTransfer : Math.max(0, Math.ceil((transferEnd - now) / 1000));
         const transferProgress = activeTransfer && totalTransfer > 0 ? Math.max(0, Math.min(100, ((totalTransfer - transferRemaining) / totalTransfer) * 100)) : completed ? 100 : 0;
         const rideProgress = completed ? 100 : tracking ? progress(segment.board_dt, segment.alight_dt, now) : 0;
