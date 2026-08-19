@@ -108,7 +108,7 @@ export function healthSnapshot(): Record<string, unknown> {
   return {
     ok: true,
     version: "V14.3.0-bun",
-    upstream_parity: "V13.5.4-transfer",
+    upstream_parity: "V13.4.8",
     today_service_mode: mode,
     today_service_reason: reason,
     today_is_holiday: Boolean(holiday),
