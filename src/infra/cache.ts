@@ -1,4 +1,4 @@
-import { RedisClient } from "bun";
+import { valkeyConfigured, valkeyTransport } from "./valkey";
 
 type CacheEnvelope<T> = {
   value: T;
@@ -7,19 +7,23 @@ type CacheEnvelope<T> = {
 };
 
 type MemoryEntry = CacheEnvelope<unknown>;
+export interface CacheRefreshLease {
+  configured: boolean;
+  token: string | null;
+}
 
 const prefix = (Bun.env.REDIS_PREFIX || "jigeumta:v14").trim();
 const memory = new Map<string, MemoryEntry>();
-let redisClient: RedisClient | null | undefined;
 let lastRedisError = "";
-const counters = { hit: 0, staleHit: 0, miss: 0, write: 0, redisError: 0 };
-
-function redis(): RedisClient | null {
-  if (redisClient !== undefined) return redisClient;
-  const url = (Bun.env.REDIS_URL || Bun.env.VALKEY_URL || "").trim();
-  redisClient = url ? new RedisClient(url) : null;
-  return redisClient;
-}
+const counters = {
+  hit: 0,
+  staleHit: 0,
+  miss: 0,
+  write: 0,
+  redisError: 0,
+  lockAcquired: 0,
+  lockContended: 0,
+};
 
 function fullKey(key: string): string {
   return `${prefix}:${key}`;
@@ -39,11 +43,31 @@ function remember(key: string, entry: MemoryEntry): void {
   if (oldest) memory.delete(oldest);
 }
 
+function publicRedisError(error: unknown): string {
+  const name = error instanceof Error && error.name.trim() ? error.name.trim().slice(0, 64) : "ValkeyError";
+  if (!error || typeof error !== "object") return name;
+  const code = (error as Record<string, unknown>).code;
+  return typeof code === "string" && /^[A-Za-z0-9_.-]{1,64}$/.test(code)
+    ? `${name} (${code})`
+    : name;
+}
+
+function positiveSeconds(value: number, fallback: number): number {
+  return Math.max(1, Number.isFinite(value) ? Math.trunc(value) : fallback);
+}
+
+function recordRedisError(error: unknown): void {
+  counters.redisError += 1;
+  // /api/health is public. Never expose arbitrary client/library messages here:
+  // they may contain a connection URL, username, password, or other secret.
+  lastRedisError = publicRedisError(error);
+}
+
 export async function cacheGetJson<T>(key: string, allowStale = false): Promise<{ value: T; stale: boolean } | null> {
-  const client = redis();
+  const client = valkeyTransport();
   if (client) {
     try {
-      const raw = await client.get(fullKey(key));
+      const raw = await client.command<string | null>(["GET", fullKey(key)]);
       if (raw) {
         const parsed = JSON.parse(raw) as CacheEnvelope<T>;
         const found = usable(parsed, allowStale);
@@ -54,8 +78,7 @@ export async function cacheGetJson<T>(key: string, allowStale = false): Promise<
         }
       }
     } catch (error) {
-      counters.redisError += 1;
-      lastRedisError = error instanceof Error ? `${error.name}: ${error.message}` : String(error);
+      recordRedisError(error);
     }
   }
 
@@ -74,8 +97,8 @@ export async function cacheGetJson<T>(key: string, allowStale = false): Promise<
 
 export async function cacheSetJson<T>(key: string, value: T, ttlSeconds: number, staleSeconds = ttlSeconds): Promise<void> {
   const now = Date.now();
-  const fresh = Math.max(1, Math.trunc(ttlSeconds));
-  const stale = Math.max(fresh, Math.trunc(staleSeconds));
+  const fresh = positiveSeconds(ttlSeconds, 1);
+  const stale = Math.max(fresh, positiveSeconds(staleSeconds, fresh));
   const envelope: CacheEnvelope<T> = {
     value,
     freshUntil: now + fresh * 1000,
@@ -84,23 +107,59 @@ export async function cacheSetJson<T>(key: string, value: T, ttlSeconds: number,
   remember(key, envelope as MemoryEntry);
   counters.write += 1;
 
-  const client = redis();
+  const client = valkeyTransport();
   if (!client) return;
   try {
-    await client.set(fullKey(key), JSON.stringify(envelope));
-    await client.expire(fullKey(key), stale);
+    await client.command(["SET", fullKey(key), JSON.stringify(envelope), "EX", String(stale)]);
   } catch (error) {
-    counters.redisError += 1;
-    lastRedisError = error instanceof Error ? `${error.name}: ${error.message}` : String(error);
+    recordRedisError(error);
+  }
+}
+
+export async function cacheTryRefreshLease(key: string, ttlSeconds = 5): Promise<CacheRefreshLease> {
+  const client = valkeyTransport();
+  if (!client) return { configured: false, token: null };
+  const token = crypto.randomUUID();
+  try {
+    const result = await client.command<unknown>([
+      "SET", fullKey(`lock:${key}`), token, "NX", "EX", String(positiveSeconds(ttlSeconds, 5)),
+    ]);
+    if (result === "OK") {
+      counters.lockAcquired += 1;
+      return { configured: true, token };
+    }
+    counters.lockContended += 1;
+    return { configured: true, token: null };
+  } catch (error) {
+    recordRedisError(error);
+    return { configured: false, token: null };
+  }
+}
+
+export async function cacheReleaseRefreshLease(key: string, token: string): Promise<void> {
+  const client = valkeyTransport();
+  if (!client) return;
+  const script = "if redis.call('GET',KEYS[1])==ARGV[1] then return redis.call('DEL',KEYS[1]) else return 0 end";
+  try {
+    await client.command(["EVAL", script, "1", fullKey(`lock:${key}`), token]);
+  } catch (error) {
+    recordRedisError(error);
   }
 }
 
 export function cacheSnapshot(): Record<string, unknown> {
   return {
-    redis_configured: Boolean((Bun.env.REDIS_URL || Bun.env.VALKEY_URL || "").trim()),
+    redis_configured: valkeyConfigured(),
+    backend: valkeyConfigured() ? "native-valkey" : "memory",
     namespace: prefix,
     memory_entries: memory.size,
     counters: { ...counters },
     last_redis_error: lastRedisError || null,
   };
+}
+
+export function resetCacheStateForTests(): void {
+  memory.clear();
+  lastRedisError = "";
+  for (const key of Object.keys(counters) as Array<keyof typeof counters>) counters[key] = 0;
 }

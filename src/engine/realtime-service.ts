@@ -1,5 +1,5 @@
 import { LINE_NAMES, type LineName, type PositionCache, type PositionCacheEntry, type PositionRow, type RealtimeEnvelope, type Train } from "../types/domain";
-import { cacheGetJson, cacheSetJson } from "../infra/cache";
+import { cacheGetJson, cacheReleaseRefreshLease, cacheSetJson, cacheTryRefreshLease } from "../infra/cache";
 import { logEvent } from "../infra/observability";
 import { allTrains, canonStation, firstCurrentIndex, parseDt, resolveServiceMode, stopTimeSec, nowKst } from "./timetable-service";
 
@@ -17,6 +17,14 @@ const LINE_IDS: Record<string, string> = {
 const GTX_NORTH = new Set(["운정중앙", "킨텍스", "대곡", "연신내", "서울역"]);
 const GTX_SOUTH = new Set(["수서", "성남", "구성", "동탄"]);
 const sinbundangFormationByScheduleId = new Map<string, string>();
+
+type RealtimeSourceResult = {
+  ok: boolean;
+  error: string | null;
+  data: RealtimeEnvelope | null;
+  cacheState: "hit" | "stale" | "miss";
+  status: number | null;
+};
 
 function digitsOnly(value: unknown): string { return String(value ?? "").replace(/\D/g, ""); }
 /** Seoul's Shinbundang trainNo is a formation number (1~20), not a timetable train number. */
@@ -51,6 +59,10 @@ function apiKey(): string { const value = Bun.env.SEOUL_API_KEY?.trim() ?? ""; i
 function cacheGet(cache: PositionCache, line: string): PositionCacheEntry | PositionRow[] | undefined { return cache instanceof Map ? cache.get(line) : cache[line]; }
 function cacheSet(cache: PositionCache, line: string, value: PositionCacheEntry): void { if (cache instanceof Map) cache.set(line, value); else cache[line] = value; }
 function queries(line: string): readonly string[] { return REALTIME_QUERY_ALIASES[line] || [line]; }
+function sourceCacheKey(query: string): string {
+  const sourceId = query.match(/^(\d+):/)?.[1];
+  return `realtime-source:${sourceId || query}`;
+}
 function filteredRows(line: string, rows: PositionRow[]): PositionRow[] {
   const id = LINE_IDS[line]; let filtered = id ? rows.filter((row) => !row.subwayId || String(row.subwayId) === id) : rows;
   if (line === "GTX-A(북부)") filtered = filtered.filter((row) => GTX_NORTH.has(canonStation(row.statnNm)));
@@ -95,36 +107,112 @@ function matchSinbundangRow(row: PositionRow): PositionRow {
 }
 function normalizeRows(line: string, rows: PositionRow[]): PositionRow[] { const filtered = filteredRows(line, rows); return line === "신분당선" ? filtered.map(matchSinbundangRow) : filtered; }
 
-export async function fetchPosition(line: string, timeout = 5, fetchImpl: FetchLike = fetch): Promise<{ ok: boolean; error: string | null; data: RealtimeEnvelope | null }> {
-  const persistent = fetchImpl === fetch; const cacheKey = `realtime:${line}`;
+async function fetchRealtimeSource(query: string, timeout: number, fetchImpl: FetchLike): Promise<RealtimeSourceResult> {
+  const persistent = fetchImpl === fetch;
+  const cacheKey = sourceCacheKey(query);
   if (persistent) {
     const fresh = await cacheGetJson<RealtimeEnvelope>(cacheKey);
-    if (fresh) {
-      const rows = positionRows(fresh.value); if (line === "신분당선") rememberSinbundangPublicNumbers(rows);
-      return { ok: true, error: null, data: { ...fresh.value, _jigeumta_cache_state: fresh.stale ? "stale" : "hit" } };
-    }
+    if (fresh) return { ok: true, error: null, data: fresh.value, cacheState: "hit", status: null };
   }
-  const key = apiKey(); let lastError = "실시간 위치 조회 실패"; let lastData: RealtimeEnvelope | null = null;
-  for (const query of queries(line)) {
-    const url = `${SEOUL_REALTIME_BASE}/${key}/json/realtimePosition/0/300/${encodeURIComponent(query)}`; const controller = new AbortController(); const timer = setTimeout(() => controller.abort(), timeout * 1000); const started = performance.now();
-    try {
-      const response = await fetchImpl(url, { signal: controller.signal, headers: { "User-Agent": "JigeumTa-V14.1/1.0", Accept: "application/json" } }); const data = await response.json() as RealtimeEnvelope; lastData = data;
-      if (data && typeof data === "object" && data.RESULT) { lastError = String(data.RESULT.message ?? "실시간 위치 조회 실패"); continue; }
-      const rows = normalizeRows(line, Array.isArray(data.realtimePositionList) ? data.realtimePositionList : []); if (!rows.length && queries(line).length > 1) { lastError = `${query}: 0 rows`; continue; }
-      const envelope: RealtimeEnvelope = { ...data, realtimePositionList: rows, _jigeumta_query: query, _jigeumta_cache_state: "miss" };
-      if (persistent) await cacheSetJson(cacheKey, envelope, Number(Bun.env.REALTIME_CACHE_TTL_SECONDS || 12), Number(Bun.env.REALTIME_STALE_TTL_SECONDS || 90));
-      const contextMatched = rows.filter((row) => row._jigeumta_schedule_id !== undefined).length;
-      logEvent("info", "realtime_fetch", { line, query, rows: rows.length, context_matched: contextMatched, status: response.status, duration_ms: Math.round(performance.now() - started) });
-      return { ok: response.ok, error: response.ok ? null : `${response.status} ${response.statusText}`, data: envelope };
-    } catch (error) { lastError = error instanceof Error ? `${error.name}: ${error.message}` : String(error); logEvent("warn", "realtime_fetch_failure", { line, query, error: lastError, duration_ms: Math.round(performance.now() - started) }); }
-    finally { clearTimeout(timer); }
-  }
-  if (persistent) {
+
+  const lease = persistent
+    ? await cacheTryRefreshLease(cacheKey, Number(Bun.env.REALTIME_REFRESH_LEASE_SECONDS || 5))
+    : { configured: false, token: null };
+  if (persistent && lease.configured && !lease.token) {
     const stale = await cacheGetJson<RealtimeEnvelope>(cacheKey, true);
-    if (stale) {
-      const rows = positionRows(stale.value); if (line === "신분당선") rememberSinbundangPublicNumbers(rows);
-      logEvent("warn", "realtime_stale_cache", { line, error: lastError }); return { ok: true, error: lastError, data: { ...stale.value, _jigeumta_cache_state: "stale" } };
+    if (stale) return { ok: true, error: null, data: stale.value, cacheState: stale.stale ? "stale" : "hit", status: null };
+  }
+
+  const key = apiKey();
+  const url = `${SEOUL_REALTIME_BASE}/${key}/json/realtimePosition/0/300/${encodeURIComponent(query)}`;
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), timeout * 1000);
+  const started = performance.now();
+  let lastError = "실시간 위치 조회 실패";
+  try {
+    const response = await fetchImpl(url, { signal: controller.signal, headers: { "User-Agent": "JigeumTa-V14.1/1.0", Accept: "application/json" } });
+    const data = await response.json() as RealtimeEnvelope;
+    if (data && typeof data === "object" && data.RESULT) {
+      lastError = String(data.RESULT.message ?? "실시간 위치 조회 실패");
+      return { ok: false, error: lastError, data, cacheState: "miss", status: response.status };
     }
+    if (persistent && response.ok) {
+      await cacheSetJson(
+        cacheKey,
+        data,
+        Number(Bun.env.REALTIME_CACHE_TTL_SECONDS || 12),
+        Number(Bun.env.REALTIME_STALE_TTL_SECONDS || 90),
+      );
+    }
+    logEvent("info", "realtime_source_fetch", {
+      query,
+      source_cache_key: cacheKey,
+      status: response.status,
+      duration_ms: Math.round(performance.now() - started),
+    });
+    return {
+      ok: response.ok,
+      error: response.ok ? null : `${response.status} ${response.statusText}`,
+      data,
+      cacheState: "miss",
+      status: response.status,
+    };
+  } catch (error) {
+    lastError = error instanceof Error ? `${error.name}: ${error.message}` : String(error);
+    logEvent("warn", "realtime_source_fetch_failure", {
+      query,
+      source_cache_key: cacheKey,
+      error: lastError,
+      duration_ms: Math.round(performance.now() - started),
+    });
+    if (persistent) {
+      const stale = await cacheGetJson<RealtimeEnvelope>(cacheKey, true);
+      if (stale) return { ok: true, error: lastError, data: stale.value, cacheState: "stale", status: null };
+    }
+    return { ok: false, error: lastError, data: null, cacheState: "miss", status: null };
+  } finally {
+    clearTimeout(timer);
+    if (lease.token) await cacheReleaseRefreshLease(cacheKey, lease.token);
+  }
+}
+
+export async function fetchPosition(line: string, timeout = 5, fetchImpl: FetchLike = fetch): Promise<{ ok: boolean; error: string | null; data: RealtimeEnvelope | null }> {
+  let lastError = "실시간 위치 조회 실패";
+  let lastData: RealtimeEnvelope | null = null;
+  for (const query of queries(line)) {
+    const source = await fetchRealtimeSource(query, timeout, fetchImpl);
+    if (!source.data) {
+      lastError = source.error ?? lastError;
+      continue;
+    }
+    lastData = source.data;
+    if (source.data.RESULT) {
+      lastError = String(source.data.RESULT.message ?? source.error ?? "실시간 위치 조회 실패");
+      continue;
+    }
+    const rows = normalizeRows(line, Array.isArray(source.data.realtimePositionList) ? source.data.realtimePositionList : []);
+    if (!rows.length && queries(line).length > 1) {
+      lastError = `${query}: 0 rows`;
+      continue;
+    }
+    const envelope: RealtimeEnvelope = {
+      ...source.data,
+      realtimePositionList: rows,
+      _jigeumta_query: query,
+      _jigeumta_cache_state: source.cacheState,
+    };
+    const contextMatched = rows.filter((row) => row._jigeumta_schedule_id !== undefined).length;
+    if (line === "신분당선") rememberSinbundangPublicNumbers(rows);
+    logEvent("info", "realtime_fetch", {
+      line,
+      query,
+      source_cache_key: sourceCacheKey(query),
+      rows: rows.length,
+      context_matched: contextMatched,
+      status: source.status,
+      cache_state: source.cacheState,
+    });
+    return { ok: source.ok, error: source.error, data: envelope };
   }
   return { ok: false, error: lastError, data: lastData };
 }
@@ -139,5 +227,5 @@ export async function cachedPositionRows(line: string, cache: PositionCache, tim
   if (Array.isArray(value)) return { rows: value, error: "", available: true }; return { rows: value.rows ?? [], error: value.error ?? "", available: Boolean(value.available), query: value.query, cache_state: value.cache_state };
 }
 export function apiKeyConfigured(): boolean { return Boolean(Bun.env.SEOUL_API_KEY?.trim()); }
-export function healthRealtimeSnapshot(): Record<string, unknown> { return { configured: apiKeyConfigured(), baseUrl: SEOUL_REALTIME_BASE, query_aliases: REALTIME_QUERY_ALIASES, line_ids: LINE_IDS, sinbundang_train_number_policy: "timetable_internal_index_api_formation_display" }; }
+export function healthRealtimeSnapshot(): Record<string, unknown> { return { configured: apiKeyConfigured(), baseUrl: SEOUL_REALTIME_BASE, query_aliases: REALTIME_QUERY_ALIASES, line_ids: LINE_IDS, cache_key_policy: "upstream-source", sinbundang_train_number_policy: "timetable_internal_index_api_formation_display" }; }
 export { nowKst, parseDt };

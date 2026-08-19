@@ -14,6 +14,37 @@ describe("client API error boundary", () => {
     await expect(promise).rejects.toMatchObject({ name: "ApiError", status: 400, message: "요청 실패" });
   });
 
+  test("keeps generic GET transport-only for successful capability responses", async () => {
+    const payload = {
+      ok: true,
+      capable: false,
+      configuration_message: "Valkey/Redis 푸시 저장소가 구성되지 않았습니다.",
+      public_key: null,
+    };
+    const client = new ApiClient({ fetchImpl: async () => new Response(JSON.stringify(payload), { status: 200 }) });
+    await expect(client.get("/api/push/public-key")).resolves.toEqual(payload);
+  });
+
+  test("surfaces exact push configuration diagnostics instead of a generic server message", async () => {
+    const payload = {
+      ok: true,
+      capable: false,
+      subscription_capable: false,
+      arrival_alert_capable: false,
+      scheduler_mode: null,
+      configuration_issues: ["storage_unavailable", "scheduler_unavailable"],
+      configuration_message: "Valkey/Redis 푸시 저장소가 구성되지 않았습니다.",
+      public_key: null,
+    };
+    const client = new ApiClient({ fetchImpl: async () => new Response(JSON.stringify(payload), { status: 200 }) });
+    await expect(client.pushPublicKey()).rejects.toMatchObject({
+      name: "ApiError",
+      status: 200,
+      message: "Valkey/Redis 푸시 저장소가 구성되지 않았습니다.",
+      payload,
+    });
+  });
+
   test("aborts requests after the configured timeout", async () => {
     const client = new ApiClient({ defaultTimeoutMs: 15, fetchImpl: (_url, init) => new Promise<Response>((_resolve, reject) => {
       init?.signal?.addEventListener("abort", () => reject(new DOMException("aborted", "AbortError")), { once: true });
