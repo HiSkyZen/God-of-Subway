@@ -14,11 +14,11 @@ export {
   handlePushAlertDelete,
   handlePushAlertPost,
   handlePushAlertStatus,
-  handlePushPublicKey,
   handlePushSubscriptionDelete,
   handlePushSubscriptionPost,
   handlePushTest,
 } from "./push/handlers";
+export { handlePushPublicKey } from "./push/public-key";
 export { handlePushDispatch } from "./push/dispatch";
 export { configureNativePushStorage } from "./push/configure-storage";
 
