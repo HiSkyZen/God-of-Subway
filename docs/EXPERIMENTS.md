@@ -20,4 +20,4 @@
 
 환승시간 비교 실험에서는 `transfer_info.base_seconds`, `transfer_info.seconds`, `crowding_multiplier`, `mode`를 함께 확인해야 합니다. `mode=same-platform`은 0초가 정상 값입니다.
 
-실험 기록은 운영 정답 데이터로 자동 승격되지 않습니다. 데이터 보정이 필요하면 별도 검증 후 `transfer_data.json` 또는 `transfer-policy.ts`에 provenance와 함께 반영하십시오.
+실험 기록은 운영 정답 데이터로 자동 승격되지 않습니다. 데이터 보정이 필요하면 별도 검증 후 `data/transfer_data.json` 또는 `transfer-policy.ts`에 provenance와 함께 반영하십시오.

@@ -1,7 +1,7 @@
 interface Pair { station?: string; from_line?: string; to_line?: string; default_seconds?: number | null; distance_seconds?: number | null; records?: unknown[]; [key: string]: unknown }
 interface TransferData { meta?: Record<string, unknown>; pairs?: Record<string, Pair> }
 
-const data = await Bun.file("transfer_data.json").json() as TransferData;
+const data = await Bun.file("data/transfer_data.json").json() as TransferData;
 const pairs = Object.values(data.pairs ?? {});
 const zero = pairs.filter((pair) => Number(pair.default_seconds ?? pair.distance_seconds) === 0);
 const rawMissing = pairs.filter((pair) => !Number.isFinite(Number(pair.default_seconds ?? pair.distance_seconds)));

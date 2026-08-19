@@ -10,12 +10,12 @@
 HTTP 입력을 검증해 엔진 함수에 전달합니다. API 계층은 철도 규칙을 소유하지 않습니다.
 
 ### `src/engine`
-- `data-repository.ts`: JSON 데이터셋 lazy load와 크기 검증
+- `data-repository.ts`: `data/` JSON 데이터셋 lazy load와 크기 검증
 - `timetable-service.ts`: 노선별 시간표, 역 정규화, 열차 조회
 - `realtime-service.ts`: 서울시 실시간 위치와 캐시
 - `eta-service.ts`: 열차 매칭, 지연 관측, 구간 ETA
 - `routing-service.ts`: 그래프/후보 경로, 동명이의역 물리 분리, 환승 세그먼트
-- `transfer-policy.ts`: 물리 승강장 오버라이드, 지도 표본 노이즈, 혼잡 가중치
+- `transfer-policy.ts`: 물리 승강장 오버라이드와 혼잡 가중치
 - `rapid-service.ts`: 급행/완행 서비스 분류와 교체 가능성
 - `gtx-service.ts`, `gtx-topology.ts`: GTX-A 구간과 일반 노선 혼합 후보
 
@@ -28,7 +28,7 @@ React PWA입니다. 검색 후보는 `노선 아이콘 + 노선명 + 역명`으�
 ## 자동 경로 흐름
 
 1. 검색 입력을 역명/노선 선택자로 해석합니다.
-2. `route_graph.json`의 승차 엣지와 `transfer_data.json`에 명시된 노선쌍 및 감사된 물리 공용선로 정책만 환승 엣지로 만듭니다.
+2. `data/route_graph.json`의 승차 엣지와 `data/transfer_data.json`에 명시된 노선쌍 및 감사된 물리 공용선로 정책만 환승 엣지로 만듭니다.
 3. Yen/Dijkstra 기반으로 다수 후보를 만듭니다.
 4. 급행 운영 노선에서는 실제 시간표의 서비스/정차 패턴을 보고 급행↔완행 분할 후보를 추가합니다.
 5. 환승 세그먼트에 물리 승강장 정책과 혼잡 가중치를 적용합니다.
@@ -41,5 +41,5 @@ React PWA입니다. 검색 후보는 `노선 아이콘 + 노선명 + 역명`으�
 - `0초`는 유효한 제자리 환승 값이며 falsy로 버리지 않습니다.
 - 공용선로도 반대 방향이면 자동으로 제자리 환승이 아닙니다.
 - 대곡 경의중앙선↔서해선은 0초가 아닙니다.
-- 지도/추정 출처는 측정값과 구분합니다.
+- 측정값과 모델링/추정값의 provenance를 구분합니다.
 - 혼잡 가중치는 1.75를 넘지 않습니다.

@@ -11,9 +11,14 @@ const resolvedPaths = new Map<string, string>();
 function isObject(value: unknown): value is JsonObject { return typeof value === "object" && value !== null && !Array.isArray(value); }
 function dataPath(name: string): string {
   const cached = resolvedPaths.get(name); if (cached) return cached;
-  const candidates = [join(root, name), resolve(dirname(import.meta.path), "../../", name), resolve(dirname(import.meta.path), "../../../", name), join(process.cwd(), name)];
+  const candidates = [
+    join(root, "data", name),
+    join(process.cwd(), "data", name),
+    resolve(dirname(import.meta.path), "../../data", name),
+    resolve(dirname(import.meta.path), "../../../data", name),
+  ];
   for (const candidate of candidates) if (existsSync(candidate)) { resolvedPaths.set(name, candidate); return candidate; }
-  throw new Error(`데이터 파일을 찾지 못했습니다: ${name}`);
+  throw new Error(`데이터 파일을 찾지 못했습니다: data/${name}`);
 }
 function readJson<T>(name: string): T { return JSON.parse(readFileSync(dataPath(name), "utf8")) as T; }
 function asRecord(value: unknown): JsonObject { return isObject(value) ? value : {}; }
