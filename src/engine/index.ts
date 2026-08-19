@@ -44,6 +44,15 @@ function usesGtx(result: Serialized): boolean {
   return Array.isArray(result.segments) && result.segments.some((segment) => isRecord(segment) && isGtxLine(String(segment.line ?? "")));
 }
 
+export function shouldPreferNonGtxTie(withGtx: Serialized, withoutGtx: Serialized): boolean {
+  return withGtx.ok !== false
+    && withoutGtx.ok !== false
+    && usesGtx(withGtx)
+    && !usesGtx(withoutGtx)
+    && Boolean(String(withGtx.arrival_time ?? ""))
+    && String(withGtx.arrival_time ?? "") === String(withoutGtx.arrival_time ?? "");
+}
+
 export async function calculateRoute(payload: Record<string, unknown>, positionCache?: PositionCache, fetchImpl: FetchLike = fetch): Promise<Serialized> {
   const typed = payload as unknown as CalculateRoutePayload;
   const result = !typed.segments.some((segment) => isGtxLine(String(segment.line)))
@@ -57,7 +66,7 @@ export async function calculateAutoRoute(payload: Record<string, unknown>, fetch
   let result = await calculateGtxHybridAuto(typed, (next) => calculateRouteImpl(next, undefined, fetchImpl), fetchImpl);
   if (!Boolean(typed.exclude_gtx) && result.ok !== false && usesGtx(result)) {
     const withoutGtx = await calculateGtxHybridAuto({ ...typed, exclude_gtx: true }, (next) => calculateRouteImpl(next, undefined, fetchImpl), fetchImpl);
-    if (withoutGtx.ok !== false && String(withoutGtx.arrival_time ?? "") === String(result.arrival_time ?? "")) {
+    if (shouldPreferNonGtxTie(result, withoutGtx)) {
       result = {
         ...withoutGtx,
         gtx_excluded: false,
