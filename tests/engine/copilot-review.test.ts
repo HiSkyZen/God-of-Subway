@@ -27,7 +27,7 @@ test("unknown GTX realtime station never fabricates a between-station label and 
 
     expect(result?.ok).toBe(true);
     const segment = Array.isArray(result?.segments) ? result.segments[0] as Record<string, unknown> : null;
-    expect(segment?.location_label).toBe("미확인역");
+    expect(segment?.location_label).toBe("미확인");
     expect(String(segment?.location_label ?? "")).not.toContain("운정중앙-");
     expect(segment?.status).toBe("운행 중");
     expect(result?.current_status).toBe("운행 중");
