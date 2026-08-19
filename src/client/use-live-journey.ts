@@ -32,7 +32,7 @@ export interface LiveJourneyController {
   liveResult: RouteResponse | null;
   restoredResult: AutoRouteResponse | null;
   clearLiveResult(): void;
-  startTracking(index: number, trainNo: string | number): void;
+  startTracking(index: number, trainNo: string | number, displayLabel?: string): void;
   finishTransfer(): Promise<void>;
   handleAlight(): void;
   stopTracking(quiet?: boolean): void;
@@ -65,7 +65,7 @@ export function useLiveJourney(options: LiveJourneyOptions): LiveJourneyControll
 
   const clearLiveResult = useCallback((): void => { setLiveResult(null); }, []);
 
-  const startTracking = useCallback((index: number, trainNo: string | number): void => {
+  const startTracking = useCallback((index: number, trainNo: string | number, displayLabel?: string): void => {
     const normalizedTrainNo = String(trainNo).trim();
     if (!normalizedTrainNo || normalizedTrainNo === "-") return;
     const currentOptions = optionsRef.current;
@@ -102,7 +102,8 @@ export function useLiveJourney(options: LiveJourneyOptions): LiveJourneyControll
     persistLiveTrip(trip);
     setLiveResult(null);
     track("train_tracking_start", { line: trip.segments[index]?.line, train_no: normalizedTrainNo, segment_index: index + 1 });
-    currentOptions.notify(`${normalizedTrainNo}열차를 추적합니다.`);
+    const publicLabel = String(displayLabel ?? "").trim();
+    currentOptions.notify(publicLabel ? `${publicLabel}를 추적합니다.` : `${normalizedTrainNo}열차를 추적합니다.`);
     const alert = currentOptions.alert;
     if (alert && !alert.pending_cancel && alertNeedsTripReplacement(alert.trip_snapshot, trip)) {
       void currentOptions.onSyncAlert(trip, true).then((saved) => { if (!saved) optionsRef.current.notify("도착 알림 동기화 실패"); });
@@ -126,11 +127,13 @@ export function useLiveJourney(options: LiveJourneyOptions): LiveJourneyControll
 
   const autoBoardWaiting = useCallback((trip: StoredTrip, result: RouteResponse | null): void => {
     if (!result || trip.phase !== "waiting") return;
-    const candidate = result.segments?.[0]?.train_no;
+    const segment = result.segments?.[0];
+    const candidate = segment?.tracking_id ?? segment?.train_no;
     if (!candidate) return;
     const latest = liveTripRef.current;
     if (!latest || latest.phase !== "waiting" || latest.activeIndex !== trip.activeIndex || latest.journeyStartedAt !== trip.journeyStartedAt) return;
-    startTracking(latest.activeIndex, candidate);
+    const publicNo = String(segment?.train_no ?? "").trim();
+    startTracking(latest.activeIndex, candidate, publicNo ? `${publicNo}열차` : "시간표 열차");
   }, [startTracking]);
 
   const finishTransfer = useCallback(async (): Promise<void> => {
