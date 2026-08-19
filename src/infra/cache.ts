@@ -43,9 +43,24 @@ function remember(key: string, entry: MemoryEntry): void {
   if (oldest) memory.delete(oldest);
 }
 
+function publicRedisError(error: unknown): string {
+  const name = error instanceof Error && error.name.trim() ? error.name.trim().slice(0, 64) : "ValkeyError";
+  if (!error || typeof error !== "object") return name;
+  const code = (error as Record<string, unknown>).code;
+  return typeof code === "string" && /^[A-Za-z0-9_.-]{1,64}$/.test(code)
+    ? `${name} (${code})`
+    : name;
+}
+
+function positiveSeconds(value: number, fallback: number): number {
+  return Math.max(1, Number.isFinite(value) ? Math.trunc(value) : fallback);
+}
+
 function recordRedisError(error: unknown): void {
   counters.redisError += 1;
-  lastRedisError = error instanceof Error ? `${error.name}: ${error.message}` : String(error);
+  // /api/health is public. Never expose arbitrary client/library messages here:
+  // they may contain a connection URL, username, password, or other secret.
+  lastRedisError = publicRedisError(error);
 }
 
 export async function cacheGetJson<T>(key: string, allowStale = false): Promise<{ value: T; stale: boolean } | null> {
@@ -82,8 +97,8 @@ export async function cacheGetJson<T>(key: string, allowStale = false): Promise<
 
 export async function cacheSetJson<T>(key: string, value: T, ttlSeconds: number, staleSeconds = ttlSeconds): Promise<void> {
   const now = Date.now();
-  const fresh = Math.max(1, Math.trunc(ttlSeconds));
-  const stale = Math.max(fresh, Math.trunc(staleSeconds));
+  const fresh = positiveSeconds(ttlSeconds, 1);
+  const stale = Math.max(fresh, positiveSeconds(staleSeconds, fresh));
   const envelope: CacheEnvelope<T> = {
     value,
     freshUntil: now + fresh * 1000,
@@ -107,7 +122,7 @@ export async function cacheTryRefreshLease(key: string, ttlSeconds = 5): Promise
   const token = crypto.randomUUID();
   try {
     const result = await client.command<unknown>([
-      "SET", fullKey(`lock:${key}`), token, "NX", "EX", String(Math.max(1, Math.trunc(ttlSeconds))),
+      "SET", fullKey(`lock:${key}`), token, "NX", "EX", String(positiveSeconds(ttlSeconds, 5)),
     ]);
     if (result === "OK") {
       counters.lockAcquired += 1;
