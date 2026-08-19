@@ -2,6 +2,7 @@ import { existsSync, readFileSync, statSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import type { EngineData, RawTrain } from "../types/domain";
 import { DATASET_METADATA } from "./data-metadata";
+import { isDisjointHomonymTransfer } from "./station-identity";
 
 type JsonObject = { [key: string]: unknown };
 type DatasetKey = "s1-weekday" | "s1-holiday" | "s1-stations" | "official" | "extra" | "sinbundang" | "holidays" | "graph" | "transfers";
@@ -18,6 +19,16 @@ function readJson<T>(name: string): T { return JSON.parse(readFileSync(dataPath(
 function asRecord(value: unknown): JsonObject { return isObject(value) ? value : {}; }
 function asStringArray(value: unknown): string[] { return Array.isArray(value) ? value.filter((x): x is string => typeof x === "string") : []; }
 function asRawTrains(value: unknown): Record<string, RawTrain> { const result: Record<string, RawTrain> = {}; for (const [key, raw] of Object.entries(asRecord(value))) if (isObject(raw)) result[key] = raw as RawTrain; return result; }
+
+/** Preserve the imported upstream file verbatim while removing impossible runtime edges. */
+function sanitizedTransfers(value: unknown): EngineData["transfers"] {
+  const raw = asRecord(value);
+  const pairs = Object.fromEntries(Object.entries(asRecord(raw.pairs)).filter(([, entry]) => {
+    if (!isObject(entry)) return true;
+    return !isDisjointHomonymTransfer(entry.station, entry.from_line, entry.to_line);
+  }));
+  return { ...raw, pairs } as EngineData["transfers"];
+}
 
 function firstServiceSecond(train: RawTrain): number {
   for (const stop of train.stops ?? []) {
@@ -79,7 +90,7 @@ class JsonDataRepository implements DataRepository {
       }) },
       holidays: { enumerable: true, get: () => this.cached("holidays", () => asRecord(readJson<unknown>("kr_holidays_2026_2035.json")) as EngineData["holidays"]) },
       graph: { enumerable: true, get: () => this.cached("graph", () => asRecord(readJson<unknown>("route_graph.json")) as EngineData["graph"]) },
-      transfers: { enumerable: true, get: () => this.cached("transfers", () => asRecord(readJson<unknown>("transfer_data.json")) as EngineData["transfers"]) },
+      transfers: { enumerable: true, get: () => this.cached("transfers", () => sanitizedTransfers(readJson<unknown>("transfer_data.json"))) },
     });
     this.data = view;
   }
