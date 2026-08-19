@@ -71,7 +71,8 @@ test("native Valkey push stores preserve atomic Lua and lease operations", async
   expect(commands[0].join(" ")).toContain("HEXISTS");
 
   expect(await alerts.acquireDispatchLease("lease-token", 90)).toBe(true);
-  const lease = commands.find((command) => command[0] === "SET" && command.includes("dispatch-lease"));
+  const lease = commands.find((command) => command[0] === "SET"
+    && command.some((part) => part.includes("dispatch-lease")));
   expect(lease?.slice(-3)).toEqual(["NX", "EX", "90"]);
 
   expect(await alerts.claimForDelivery(subscription.endpoint, alert.alertId, "claim-token", 90)).toBe(true);
