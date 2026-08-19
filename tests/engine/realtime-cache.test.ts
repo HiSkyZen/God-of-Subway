@@ -25,7 +25,7 @@ test("GTX north and south reuse one upstream 1032 source cache", async () => {
         { subwayId: "1032", statnNm: "수서", trainNo: "X002" },
       ],
     }), { status: 200, headers: { "content-type": "application/json" } });
-  }) as typeof fetch;
+  }) as unknown as typeof fetch;
 
   const north = await fetchPosition("GTX-A(북부)");
   const south = await fetchPosition("GTX-A(남부)");
