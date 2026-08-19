@@ -75,7 +75,7 @@ test("public train number is shown without leaking the Shinbundang timetable id"
   const sbResult: AutoRouteResponse = { ok: true, from: "강남", to: "판교", arrival_time: "2026-08-18 10:15:00", segments: sb };
   const html = renderToStaticMarkup(<UpstreamJourneyView result={sbResult} segments={sb} arrivalTime={sbResult.arrival_time} totalSeconds={900} activeIndex={0} liveTrip={null} onBoard={() => undefined} onRefresh={() => undefined} onExcludeGtx={() => undefined} />);
   expect(html).toContain("D007");
-  expect(html).not.toContain("열차 <b>D007열차</b>");
+  expect(html).not.toContain("D007열차</b>");
   expect(html).not.toContain("SB-W-0042");
 });
 
