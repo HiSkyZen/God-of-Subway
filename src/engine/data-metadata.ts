@@ -1,4 +1,4 @@
-/** Build-time dataset metadata mirrored from the current upstream V13.4.8 data set. */
+/** Build-time dataset metadata for runtime validation. */
 export const DATASET_METADATA = {
   files: {
     "schedule_weekday.json": 2_601_226,
@@ -8,10 +8,13 @@ export const DATASET_METADATA = {
     "korail_extra_lines_schedule.json": 4_142_164,
     "sinbundang_schedule.json": 697_921,
     "kr_holidays_2026_2035.json": 18_750,
-    "route_graph.json": 166_764,
-    "transfer_data.json": 181_534,
+    "route_graph.json": 202_381,
+    "transfer_data.json": 337_143,
+    "urban_schedule.json": 14_336,
+    "transfer_overlay.json": 14_114,
   },
   official: { source: "서울교통공사_도시철도열차운행시각표(250930).csv", version: "250930" },
+  transfers: { upstream_version: "V13.5.4", audit_remaining_needs_verification: 124, completion_overlay: true },
   line1: { weekday: 843, holiday: 729 },
   extra: {
     "경의중앙선": { weekday: 183, holiday: 149 },
@@ -21,5 +24,12 @@ export const DATASET_METADATA = {
     "경춘선": { weekday: 130, holiday: 87 },
     "공항철도": { weekday: 421, holiday: 373 },
     "신분당선": { weekday: 326, holiday: 272 },
+    "인천1호선": { weekday: 316, holiday: 256 },
+    "인천2호선": { weekday: 476, holiday: 362 },
+    "용인에버라인": { weekday: 410, holiday: 332 },
+    "김포골드라인": { weekday: 435, holiday: 350 },
+    "의정부경전철": { weekday: 440, holiday: 328 },
+    "우이신설선": { weekday: 516, holiday: 424 },
+    "신림선": { weekday: 374, holiday: 306 },
   },
 } as const;

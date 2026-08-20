@@ -1,6 +1,6 @@
 const vercel = await Bun.file("vercel.json").json() as { functions?: Record<string, { includeFiles?: string }> };
 const includeFiles = vercel.functions?.["api/index.ts"]?.includeFiles || "";
-for (const required of [
+const runtimeDataFiles = [
   "schedule_weekday.json",
   "schedule_holiday.json",
   "stations.json",
@@ -10,8 +10,13 @@ for (const required of [
   "kr_holidays_2026_2035.json",
   "route_graph.json",
   "transfer_data.json",
-]) {
-  if (!includeFiles.includes(required)) throw new Error(`Vercel function is missing required runtime data: ${required}`);
+  "urban_schedule.json",
+  "transfer_overlay.json",
+] as const;
+if (includeFiles !== "data/*.json") throw new Error(`Vercel function runtime-data glob is stale: ${includeFiles || "<missing>"}`);
+for (const required of runtimeDataFiles) {
+  const path = `data/${required}`;
+  if (!(await Bun.file(path).exists())) throw new Error(`Vercel function runtime data is missing: ${path}`);
 }
 
 Bun.env.PORT = "0";

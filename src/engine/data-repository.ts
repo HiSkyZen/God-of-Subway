@@ -2,22 +2,123 @@ import { existsSync, readFileSync, statSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import type { EngineData, RawTrain } from "../types/domain";
 import { DATASET_METADATA } from "./data-metadata";
+import { isDisjointHomonymTransfer } from "./station-identity";
 
 type JsonObject = { [key: string]: unknown };
-type DatasetKey = "s1-weekday" | "s1-holiday" | "s1-stations" | "official" | "extra" | "sinbundang" | "holidays" | "graph" | "transfers";
+type DatasetKey = "s1-weekday" | "s1-holiday" | "s1-stations" | "official" | "extra" | "sinbundang" | "urban" | "holidays" | "graph" | "transfers" | "transfer-overlay";
 const root = resolve(dirname(import.meta.path), "../..");
 const resolvedPaths = new Map<string, string>();
 function isObject(value: unknown): value is JsonObject { return typeof value === "object" && value !== null && !Array.isArray(value); }
 function dataPath(name: string): string {
   const cached = resolvedPaths.get(name); if (cached) return cached;
-  const candidates = [join(root, name), resolve(dirname(import.meta.path), "../../", name), resolve(dirname(import.meta.path), "../../../", name), join(process.cwd(), name)];
+  const candidates = [
+    join(root, "data", name),
+    join(process.cwd(), "data", name),
+    resolve(dirname(import.meta.path), "../../data", name),
+    resolve(dirname(import.meta.path), "../../../data", name),
+  ];
   for (const candidate of candidates) if (existsSync(candidate)) { resolvedPaths.set(name, candidate); return candidate; }
-  throw new Error(`데이터 파일을 찾지 못했습니다: ${name}`);
+  throw new Error(`데이터 파일을 찾지 못했습니다: data/${name}`);
 }
 function readJson<T>(name: string): T { return JSON.parse(readFileSync(dataPath(name), "utf8")) as T; }
 function asRecord(value: unknown): JsonObject { return isObject(value) ? value : {}; }
 function asStringArray(value: unknown): string[] { return Array.isArray(value) ? value.filter((x): x is string => typeof x === "string") : []; }
 function asRawTrains(value: unknown): Record<string, RawTrain> { const result: Record<string, RawTrain> = {}; for (const [key, raw] of Object.entries(asRecord(value))) if (isObject(raw)) result[key] = raw as RawTrain; return result; }
+
+/** Preserve the imported upstream file verbatim while removing impossible runtime edges. */
+function sanitizedTransfers(value: unknown): EngineData["transfers"] {
+  const raw = asRecord(value);
+  const pairs = Object.fromEntries(Object.entries(asRecord(raw.pairs)).filter(([, entry]) => {
+    if (!isObject(entry)) return true;
+    return !isDisjointHomonymTransfer(entry.station, entry.from_line, entry.to_line);
+  }));
+  return { ...raw, pairs } as EngineData["transfers"];
+}
+
+interface UrbanWindow { 0: number; 1: number; 2: number }
+interface UrbanModeDefinition {
+  forward?: UrbanWindow[];
+  reverse?: UrbanWindow[];
+  forward_departures?: number[];
+  reverse_departures?: number[];
+}
+interface UrbanLineDefinition {
+  stations?: string[];
+  segment_seconds?: number[];
+  weekday?: UrbanModeDefinition;
+  holiday?: UrbanModeDefinition;
+}
+function generatedUrbanLines(value: unknown): EngineData["extra"] {
+  const result: EngineData["extra"] = {};
+  const lines = asRecord(asRecord(value).lines);
+  const makeMode = (line: string, cfg: UrbanLineDefinition, mode: "weekday" | "holiday"): Record<string, RawTrain> => {
+    const output: Record<string, RawTrain> = {};
+    const stations = asStringArray(cfg.stations);
+    const segmentSeconds = Array.isArray(cfg.segment_seconds) ? cfg.segment_seconds.map(Number) : [];
+    const modeCfg = cfg[mode] ?? {};
+    const directions: Array<["forward" | "reverse", string[], number[]]> = [
+      ["forward", stations, segmentSeconds],
+      ["reverse", [...stations].reverse(), [...segmentSeconds].reverse()],
+    ];
+    let sequence = 0;
+    for (const [directionKey, orderedStations, orderedSeconds] of directions) {
+      const windows = Array.isArray(modeCfg[directionKey]) ? modeCfg[directionKey] as UrbanWindow[] : [];
+      const departures = new Set<number>();
+      const exactDepartures = directionKey === "forward" ? modeCfg.forward_departures : modeCfg.reverse_departures;
+      for (const rawDeparture of exactDepartures ?? []) {
+        const departure = Math.trunc(Number(rawDeparture));
+        if (Number.isFinite(departure) && departure >= 0) departures.add(departure);
+      }
+      for (const rawWindow of windows) {
+        const start = Math.trunc(Number(rawWindow?.[0]));
+        const end = Math.trunc(Number(rawWindow?.[1]));
+        const headway = Math.max(60, Math.trunc(Number(rawWindow?.[2])));
+        if (!Number.isFinite(start) || !Number.isFinite(end) || !Number.isFinite(headway) || end < start) continue;
+        for (let second = start; second <= end; second += headway) departures.add(second);
+      }
+      for (const departure of [...departures].sort((a, b) => a - b)) {
+        const stops: NonNullable<RawTrain["stops"]> = [];
+        let cursor = departure;
+        for (let index = 0; index < orderedStations.length; index += 1) {
+          const terminal = index === 0 || index === orderedStations.length - 1;
+          stops.push({ station: orderedStations[index], arr: index === 0 ? null : cursor, dep: index === orderedStations.length - 1 ? null : cursor + (terminal ? 0 : 25), call: true });
+          if (index < orderedSeconds.length) cursor += Number(orderedSeconds[index]) + (index === 0 ? 0 : 25);
+        }
+        sequence += 1;
+        const code = line.replace(/[^0-9A-Za-z가-힣]/g, "").slice(0, 4);
+        const id = `URB-${code}-${mode === "weekday" ? "W" : "H"}-${directionKey === "forward" ? "D" : "U"}-${String(sequence).padStart(4, "0")}`;
+        output[id] = {
+          direction: directionKey === "forward" ? "DOWN" : "UP",
+          service: "local",
+          start: orderedStations[0] ?? "",
+          dest: orderedStations[orderedStations.length - 1] ?? "",
+          stops,
+        };
+      }
+    }
+    return output;
+  };
+  for (const [line, raw] of Object.entries(lines)) {
+    if (!isObject(raw)) continue;
+    const cfg = raw as UrbanLineDefinition;
+    result[line] = {
+      stations: asStringArray(cfg.stations),
+      trains: { weekday: makeMode(line, cfg, "weekday"), holiday: makeMode(line, cfg, "holiday") },
+    };
+  }
+  return result;
+}
+function mergedTransfers(baseValue: unknown, overlayValue: unknown): EngineData["transfers"] {
+  const base = sanitizedTransfers(baseValue);
+  const overlay = asRecord(overlayValue);
+  const overlayPairs = asRecord(overlay.pairs);
+  const pairs = { ...(base.pairs ?? {}) };
+  for (const [key, raw] of Object.entries(overlayPairs)) {
+    if (!isObject(raw) || isDisjointHomonymTransfer(raw.station, raw.from_line, raw.to_line)) continue;
+    pairs[key] = raw as never;
+  }
+  return { ...base, pairs };
+}
 
 function firstServiceSecond(train: RawTrain): number {
   for (const stop of train.stops ?? []) {
@@ -75,11 +176,13 @@ class JsonDataRepository implements DataRepository {
         const extra = { ...(asRecord(readJson<unknown>("korail_extra_lines_schedule.json")) as EngineData["extra"]) };
         const sb = this.cached("sinbundang", () => asRecord(readJson<unknown>("sinbundang_schedule.json")));
         extra["신분당선"] = { stations: asStringArray(sb.stations), trains: indexedSinbundangTrains(sb.trains) };
+        const urban = this.cached("urban", () => readJson<unknown>("urban_schedule.json"));
+        Object.assign(extra, generatedUrbanLines(urban));
         return extra;
       }) },
       holidays: { enumerable: true, get: () => this.cached("holidays", () => asRecord(readJson<unknown>("kr_holidays_2026_2035.json")) as EngineData["holidays"]) },
       graph: { enumerable: true, get: () => this.cached("graph", () => asRecord(readJson<unknown>("route_graph.json")) as EngineData["graph"]) },
-      transfers: { enumerable: true, get: () => this.cached("transfers", () => asRecord(readJson<unknown>("transfer_data.json")) as EngineData["transfers"]) },
+      transfers: { enumerable: true, get: () => this.cached("transfers", () => mergedTransfers(readJson<unknown>("transfer_data.json"), this.cached("transfer-overlay", () => readJson<unknown>("transfer_overlay.json")))) },
     });
     this.data = view;
   }

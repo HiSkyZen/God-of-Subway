@@ -1,6 +1,6 @@
 {
   "name": "jigeumta",
-  "version": "14.0.0",
+  "version": "14.3.0",
   "private": true,
   "type": "module",
   "engines": {
@@ -17,10 +17,12 @@
     "generate:vapid": "bun run scripts/generate-vapid.ts",
     "verify:vapid": "bun run scripts/verify-vapid.ts",
     "check:architecture": "bun run scripts/check-push-architecture.ts",
+    "doctor": "bun run scripts/doctor.ts",
+    "audit:transfers": "bun run scripts/audit-transfers.ts",
     "typecheck": "tsc --noEmit",
     "typecheck:sw": "tsc -p tsconfig.sw.json",
     "test": "bun test",
-    "check": "bun run typecheck && bun run typecheck:sw && bun run check:architecture && bun test"
+    "check": "bun run doctor && bun run typecheck && bun run typecheck:sw && bun run check:architecture && bun test"
   },
   "devDependencies": {
     "@types/bun": "^1.3.14",

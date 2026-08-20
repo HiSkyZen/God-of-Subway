@@ -32,10 +32,8 @@ test("Vercel publishes static output while only /api is deployed as a Bun Functi
   expect(config.regions).toEqual(["icn1"]);
   expect(config.crons).toBeUndefined();
   const includeFiles = config.functions?.["api/index.ts"]?.includeFiles || "";
-  expect(includeFiles).toBe(
-    "{schedule_weekday.json,schedule_holiday.json,stations.json,official_2to9_schedule.json,korail_extra_lines_schedule.json,sinbundang_schedule.json,kr_holidays_2026_2035.json,route_graph.json,transfer_data.json}",
-  );
-  expect(includeFiles).toContain("sinbundang_schedule.json");
+  expect(includeFiles).toBe("data/*.json");
+  expect(await Bun.file("data/sinbundang_schedule.json").exists()).toBeTrue();
 
   expect(await Bun.file("src/server.ts").exists()).toBeTrue();
   expect(await Bun.file("src/bun-server.ts").exists()).toBeFalse();
