@@ -4,7 +4,6 @@ import { apiClient, ApiError } from "./api";
 import { track, trackOnce } from "./analytics";
 import type { AutoRouteResponse, Confidence, ExperimentRecord, FavoriteRoute, LiveTripState, RouteResponse, RouteSegmentInput, ServiceMode } from "./contract";
 import { useStationSuggestions } from "./hooks";
-import { stationLineSelector, type StationSuggestion } from "./station-suggestions";
 import { addMinutesToDateTime, experimentsToCsv, experimentsToJson, localDateTimeString } from "./pure";
 import { isRecord, readStorage, STORAGE_KEYS, writeStorage } from "./storage";
 
@@ -37,11 +36,11 @@ export interface JourneySearchController {
   setActiveSuggestion: Dispatch<SetStateAction<SuggestionSide | null>>;
   suggestionIndex: number;
   setSuggestionIndex: Dispatch<SetStateAction<number>>;
-  suggestions: StationSuggestion[];
+  suggestions: string[];
   search(event?: FormEvent, offsetOverride?: number, options?: JourneySearchOptions): Promise<boolean>;
   swap(): void;
   adjustTime(minutes: number): void;
-  selectSuggestion(suggestion: StationSuggestion): void;
+  selectSuggestion(name: string): void;
   onStationKeyDown(event: KeyboardEvent<HTMLInputElement>): void;
   saveFavorite(): void;
   deleteFavorite(id: string): void;
@@ -95,12 +94,8 @@ function exportFile(name: string, text: string, type: string): void {
 }
 
 export function useJourneySearch(notify: (message: string) => void): JourneySearchController {
-  const [from, setFromState] = useState("");
-  const [to, setToState] = useState("");
-  const [fromSelector, setFromSelector] = useState("");
-  const [toSelector, setToSelector] = useState("");
-  const setFrom: Dispatch<SetStateAction<string>> = (value) => { setFromSelector(""); setFromState(value); };
-  const setTo: Dispatch<SetStateAction<string>> = (value) => { setToSelector(""); setToState(value); };
+  const [from, setFrom] = useState("");
+  const [to, setTo] = useState("");
   const [stations, setStations] = useState<Record<string, string[]>>({});
   const [healthState, setHealthState] = useState<"checking" | "ok" | "error">("checking");
   const [searchMinutes, setSearchMinutes] = useState(0);
@@ -140,8 +135,6 @@ export function useJourneySearch(notify: (message: string) => void): JourneySear
     event?.preventDefault();
     if (!from.trim() || !to.trim()) { notify("출발역과 도착역을 입력하세요."); track("route_search_invalid"); return false; }
     const excludeGtx = Boolean(options?.excludeGtx);
-    const requestFrom = fromSelector || from.trim();
-    const requestTo = toSelector || to.trim();
     setLoading(true);
     setError("");
     track("route_search", { from, to, exclude_gtx: excludeGtx });
@@ -149,7 +142,7 @@ export function useJourneySearch(notify: (message: string) => void): JourneySear
     const start = exactTimeValue ? new Date(`${localDateTimeString(new Date()).slice(0, 10)}T${exactTimeValue}:00`) : new Date(Date.now() + (offsetOverride ?? searchMinutes) * 60_000);
     const inputSegments: RouteSegmentInput[] = [{ line: "", from: from.trim(), to: to.trim(), transfer_walk: 0, transfer_seconds: 0 }];
     try {
-      const next = await apiClient.autoRoute({ from: requestFrom, to: requestTo, start_time: localDateTimeString(start), baseline_minutes: baseline || null, day, exclude_gtx: excludeGtx });
+      const next = await apiClient.autoRoute({ from: from.trim(), to: to.trim(), start_time: localDateTimeString(start), baseline_minutes: baseline || null, day, exclude_gtx: excludeGtx });
       setResult(next);
       track("route_search_success", { transfer_count: next.transfer_count ?? -1, exclude_gtx: excludeGtx });
       if (experimentEnabled) {
@@ -171,26 +164,13 @@ export function useJourneySearch(notify: (message: string) => void): JourneySear
     } finally { setLoading(false); }
   };
 
-  const swap = (): void => {
-    const previousFrom = from;
-    const previousSelector = fromSelector;
-    setFromState(to);
-    setFromSelector(toSelector);
-    setToState(previousFrom);
-    setToSelector(previousSelector);
-  };
+  const swap = (): void => { setFrom(to); setTo(from); };
   const adjustTime = (minutes: number): void => { setExactTimeValue(""); setSearchMinutes(minutes); trackOnce("time_adjust", "session", { offset_minutes: minutes }); };
   const setExactTime = (value: string): void => { setExactTimeValue(value); setSearchMinutes(0); trackOnce("time_adjust", "session", { exact_time: value }); };
   const toggleSettings = (): void => setShowSettings((value) => !value);
 
-  const selectSuggestion = (suggestion: StationSuggestion): void => {
-    if (activeSuggestion === "from") {
-      setFromState(suggestion.station);
-      setFromSelector(suggestion.selector);
-    } else {
-      setToState(suggestion.station);
-      setToSelector(suggestion.selector);
-    }
+  const selectSuggestion = (name: string): void => {
+    if (activeSuggestion === "from") setFrom(name); else setTo(name);
     setActiveSuggestion(null);
     setSuggestionIndex(-1);
   };
@@ -223,24 +203,16 @@ export function useJourneySearch(notify: (message: string) => void): JourneySear
   };
 
   const loadFavorite = (favorite: FavoriteRoute): void => {
-    const first = favorite.segments[0];
-    const last = favorite.segments.at(-1);
-    setFromState(first?.from || "");
-    setToState(last?.to || "");
-    setFromSelector(first ? stationLineSelector(first.from, first.line) : "");
-    setToSelector(last ? stationLineSelector(last.to, last.line) : "");
+    setFrom(favorite.segments[0]?.from || "");
+    setTo(favorite.segments.at(-1)?.to || "");
     setDay(favorite.day);
     setResult(null);
     notify("즐겨찾기 경로를 불러왔습니다. 조회를 눌러 계산하세요.");
   };
 
   const restoreTrip = (trip: LiveTripState, restored: AutoRouteResponse): void => {
-    const first = trip.segments[0];
-    const last = trip.segments.at(-1);
-    setFromState(first?.from || "");
-    setToState(last?.to || "");
-    setFromSelector(first ? stationLineSelector(first.from, first.line) : "");
-    setToSelector(last ? stationLineSelector(last.to, last.line) : "");
+    setFrom(trip.segments[0]?.from || "");
+    setTo(trip.segments.at(-1)?.to || "");
     setDay(trip.day);
     setBaseline(trip.baseline == null ? "" : String(trip.baseline));
     setResult(restored);

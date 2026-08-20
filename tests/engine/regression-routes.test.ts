@@ -2,7 +2,6 @@ import { expect, test } from "bun:test";
 import { calculateAutoRoute } from "../../src/engine/index";
 
 const offlineFetch = async (): Promise<Response> => new Response("offline", { status: 503 });
-const ROUTE_REGRESSION_TIMEOUT_MS = 5_000;
 
 for (const [from, to] of [["대곡", "수서"], ["별내", "신내"]] as const) {
   test(`reported route ${from} → ${to} calculates without a server exception`, async () => {
@@ -17,5 +16,5 @@ for (const [from, to] of [["대곡", "수서"], ["별내", "신내"]] as const) 
     expect(result.to).toBe(to);
     expect(Array.isArray(result.segments)).toBe(true);
     expect((result.segments as unknown[]).length).toBeGreaterThan(0);
-  }, ROUTE_REGRESSION_TIMEOUT_MS);
+  });
 }

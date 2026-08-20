@@ -28,7 +28,7 @@
   "functions": {
     "api/index.ts": {
       "maxDuration": 60,
-      "includeFiles": "data/*.json"
+      "includeFiles": "{schedule_weekday.json,schedule_holiday.json,stations.json,official_2to9_schedule.json,korail_extra_lines_schedule.json,sinbundang_schedule.json,kr_holidays_2026_2035.json,route_graph.json,transfer_data.json}"
     }
   }
 }

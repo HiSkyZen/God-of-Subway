@@ -3,7 +3,6 @@ import type { KeyboardEvent, MouseEvent as ReactMouseEvent, ReactElement, RefObj
 import type { AutoRouteResponse, Confidence, ExperimentRecord, LiveTripState, RouteResponse, RouteSegment } from "./contract";
 import { useClock } from "./hooks";
 import { experimentMetrics, formatDuration } from "./pure";
-import { lineBadgeSpec, type StationSuggestion } from "./station-suggestions";
 
 export function formatClock(value?: string | null): string {
   if (!value) return "-";
@@ -29,29 +28,20 @@ export interface StationInputProps {
   label: string;
   side: "from" | "to";
   value: string;
-  suggestions: StationSuggestion[];
+  suggestions: string[];
   activeIndex: number;
   inputRef?: RefObject<HTMLInputElement | null>;
   onChange: (value: string) => void;
   onFocus: () => void;
   onBlur: () => void;
   onKeyDown: (event: KeyboardEvent<HTMLInputElement>) => void;
-  onSelect: (suggestion: StationSuggestion) => void;
-}
-
-function LineBadge({ line }: { line: string }): ReactElement {
-  const spec = lineBadgeSpec(line);
-  const width = spec.shape === "circle" ? 24 : spec.width;
-  return <svg className={`line-badge-svg ${spec.shape}`} width={width} height="24" viewBox={`0 0 ${width} 24`} role="img" aria-label={line}>
-    {spec.shape === "circle" ? <circle cx="12" cy="12" r="11" fill={spec.color} /> : <rect x="1" y="1" width={width - 2} height="22" rx="11" fill={spec.color} />}
-    <text x={width / 2} y="12.5" textAnchor="middle" dominantBaseline="middle" fill="#fff" fontSize={spec.shape === "circle" ? "12" : "10"} fontWeight="800">{spec.text}</text>
-  </svg>;
+  onSelect: (name: string) => void;
 }
 
 export function StationInput({ label, side, value, suggestions, activeIndex, inputRef, onChange, onFocus, onBlur, onKeyDown, onSelect }: StationInputProps): ReactElement {
   const listId = `${side}-station-suggestions`;
   const activeId = activeIndex >= 0 ? `${listId}-${activeIndex}` : undefined;
-  return <label className="station-control"><span>{label}</span><div className="input-wrap"><input ref={inputRef} value={value} placeholder={label} autoComplete="off" role="combobox" aria-autocomplete="list" aria-expanded={suggestions.length > 0} aria-controls={listId} aria-activedescendant={activeId} onChange={(event) => onChange(event.target.value)} onFocus={onFocus} onBlur={onBlur} onKeyDown={onKeyDown} /><button type="button" className="clear-input" onMouseDown={(event: ReactMouseEvent) => event.preventDefault()} onClick={() => onChange("")} aria-label={`${label} 지우기`}>×</button><span className="search-icon">⌕</span>{suggestions.length > 0 && <div id={listId} className="suggestions" role="listbox">{suggestions.map((suggestion, index) => <button id={`${listId}-${index}`} role="option" aria-selected={index === activeIndex} aria-label={`${suggestion.station} ${suggestion.lines.join(" ")}`} type="button" className={index === activeIndex ? "active" : ""} key={`${suggestion.selector}-${suggestion.lines.join("|")}`} onMouseDown={(event) => { event.preventDefault(); onSelect(suggestion); }}><span className="suggestion-badges" aria-hidden="true">{suggestion.lines.map((line) => <LineBadge key={line} line={line} />)}</span><span className="suggestion-station">{suggestion.station}</span></button>)}</div>}</div></label>;
+  return <label className="station-control"><span>{label}</span><div className="input-wrap"><input ref={inputRef} value={value} placeholder={label} autoComplete="off" role="combobox" aria-autocomplete="list" aria-expanded={suggestions.length > 0} aria-controls={listId} aria-activedescendant={activeId} onChange={(event) => onChange(event.target.value)} onFocus={onFocus} onBlur={onBlur} onKeyDown={onKeyDown} /><button type="button" className="clear-input" onMouseDown={(event: ReactMouseEvent) => event.preventDefault()} onClick={() => onChange("")} aria-label={`${label} 지우기`}>×</button><span className="search-icon">⌕</span>{suggestions.length > 0 && <div id={listId} className="suggestions" role="listbox">{suggestions.map((name, index) => <button id={`${listId}-${index}`} role="option" aria-selected={index === activeIndex} type="button" className={index === activeIndex ? "active" : ""} key={name} onMouseDown={(event) => { event.preventDefault(); onSelect(name); }}>{name}</button>)}</div>}</div></label>;
 }
 
 export function JourneySummary({ result, activeSegments, arrivalTime, totalSeconds, quality, live, onRefresh }: { result: AutoRouteResponse; activeSegments: RouteSegment[]; arrivalTime?: string; totalSeconds: number; quality: string; live: boolean; onRefresh: () => void }): ReactElement {

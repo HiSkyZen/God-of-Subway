@@ -123,8 +123,6 @@ export function normalizeMetroTrain(tn: string, raw: unknown): Train { const tup
 const lineNum: Record<string, string> = Object.fromEntries(Array.from({ length: 9 }, (_, i) => [`${i + 1}호선`, String(i + 1)]));
 const continuationCache = new Map<string, Record<string, { next_train_no: string; gap_seconds: number; station: string; next_start_sec: number }>>();
 const virtualCache = new Map<string, Train | null>();
-const allTrainCache = new Map<string, Train[]>();
-const routeTrainCache = new Map<string, Train[]>();
 
 export function getTrain(line: string, mode: string, rawNo: unknown): Train | null {
   const [korailDay, metroWeek] = chooseModes(mode); const n = normTrain(rawNo); const digits = trainDigits(rawNo); const d = data();
@@ -134,16 +132,10 @@ export function getTrain(line: string, mode: string, rawNo: unknown): Train | nu
 }
 
 export function allTrains(line: string, mode: string): Train[] {
-  const cacheKey = `${line}|${mode}`;
-  const cached = allTrainCache.get(cacheKey);
-  if (cached) return cached;
   const [korailDay, metroWeek] = chooseModes(mode); const d = data();
-  let trains: Train[];
-  if (line === "1호선") trains = Object.entries(korailDay === "weekday" ? d.s1.weekday : d.s1.holiday).map(([k, v]) => normalizeS1Train(k, v));
-  else if ((EXTRA_LINES as readonly string[]).includes(line)) trains = Object.entries(d.extra[line]?.trains?.[korailDay] ?? {}).map(([k, v]) => normalizeExtraTrain(k, v));
-  else trains = Object.entries(d.official.days?.[metroWeek]?.[lineNum[line]] ?? {}).map(([k, v]) => normalizeMetroTrain(k, v));
-  allTrainCache.set(cacheKey, trains);
-  return trains;
+  if (line === "1호선") return Object.entries(korailDay === "weekday" ? d.s1.weekday : d.s1.holiday).map(([k, v]) => normalizeS1Train(k, v));
+  if ((EXTRA_LINES as readonly string[]).includes(line)) return Object.entries(d.extra[line]?.trains?.[korailDay] ?? {}).map(([k, v]) => normalizeExtraTrain(k, v));
+  return Object.entries(d.official.days?.[metroWeek]?.[lineNum[line]] ?? {}).map(([k, v]) => normalizeMetroTrain(k, v));
 }
 
 function firstSec(tr: Train): number | null { for (const s of tr.stops) { const sec = s.dep ?? s.arr; if (sec !== null) return sec; } return null; }
@@ -168,46 +160,14 @@ export function mergedContinuationTrain(line: string, mode: string, trainNo: str
   merged.push(...next); const result: Train = { train_no: pred.train_no, continuation_train_no: succ.train_no, train_numbers: [pred.train_no, succ.train_no], continuation_station: link.station, continuation_gap_seconds: link.gap_seconds, continuation_start_sec: link.next_start_sec + offset, physical_continuation: true, direction: pred.direction, continuation_direction: succ.direction, service: pred.service, start: pred.start, dest: succ.dest, stops: merged }; virtualCache.set(key, result); return result;
 }
 
-export function routePair(stops: Stop[], start: unknown, end: unknown, minStartIdx = 0): [number, number] | null {
-  const s = canonStation(start);
-  const e = canonStation(end);
-  let latestStart = -1;
-  let best: [number, number] | null = null;
-  for (let index = Math.max(0, minStartIdx); index < stops.length; index += 1) {
-    const stop = stops[index];
-    if (!stop.call) continue;
-    const station = canonStation(stop.station);
-    if (station === e && latestStart >= 0 && index > latestStart) {
-      if (!best || index - latestStart < best[1] - best[0]) best = [latestStart, index];
-    }
-    if (station === s) latestStart = index;
-  }
-  return best;
-}
+export function routePair(stops: Stop[], start: unknown, end: unknown, minStartIdx = 0): [number, number] | null { const s = canonStation(start); const e = canonStation(end); const starts = stops.map((x, i) => [i, x] as const).filter(([i, x]) => i >= minStartIdx && canonStation(x.station) === s && x.call).map(([i]) => i); const ends = stops.map((x, i) => [i, x] as const).filter(([, x]) => canonStation(x.station) === e && x.call).map(([i]) => i); const pairs = starts.flatMap((i) => ends.filter((j) => j > i).map((j) => [i, j] as [number, number])); return pairs.length ? pairs.reduce((a, b) => b[1] - b[0] < a[1] - a[0] ? b : a) : null; }
 export function indices(stops: Stop[], station: unknown): number[] { const c = canonStation(station); return stops.map((x, i) => canonStation(x.station) === c ? i : -1).filter((x) => x >= 0); }
 export function firstCurrentIndex(stops: Stop[], current: unknown, beforeOrAt?: number): number | null { const i = indices(stops, current); const valid = beforeOrAt === undefined ? i : i.filter((x) => x <= beforeOrAt); return valid.length ? valid[valid.length - 1] : i[0] ?? null; }
 export function stopBoardSec(stop: Stop): number | null { return stop.dep ?? stop.arr; }
 export function stopAlightSec(stop: Stop): number | null { return stop.arr ?? stop.dep; }
 export function stopTimeSec(stop: Stop): number | null { return stop.dep ?? stop.arr; }
 
-export function routeTrains(line: string, mode: string, start: string, end: string): Train[] {
-  const cacheKey = `${line}|${mode}|${canonStation(start)}|${canonStation(end)}`;
-  const cached = routeTrainCache.get(cacheKey);
-  if (cached) return cached;
-  const result = allTrains(line, mode).filter((tr) => routePair(tr.stops, start, end));
-  if (line === "2호선" || line === "6호선") {
-    for (const ptn of Object.keys(continuationLinks(line, mode))) {
-      const link = continuationLinks(line, mode)[ptn];
-      const pred = getTrain(line, mode, ptn);
-      const succ = getTrain(line, mode, link.next_train_no);
-      if (!pred || !succ || routePair(pred.stops, start, end) || routePair(succ.stops, start, end)) continue;
-      const virtual = mergedContinuationTrain(line, mode, ptn);
-      if (virtual && routePair(virtual.stops, start, end)) result.push(virtual);
-    }
-  }
-  routeTrainCache.set(cacheKey, result);
-  return result;
-}
+export function routeTrains(line: string, mode: string, start: string, end: string): Train[] { const result = allTrains(line, mode).filter((tr) => routePair(tr.stops, start, end)); if (line === "2호선" || line === "6호선") for (const ptn of Object.keys(continuationLinks(line, mode))) { const link = continuationLinks(line, mode)[ptn]; const pred = getTrain(line, mode, ptn); const succ = getTrain(line, mode, link.next_train_no); if (!pred || !succ || routePair(pred.stops, start, end) || routePair(succ.stops, start, end)) continue; const virtual = mergedContinuationTrain(line, mode, ptn); if (virtual && routePair(virtual.stops, start, end)) result.push(virtual); } return result; }
 
 export function stationOptions(): Record<string, string[]> {
   const sets = new Map<string, Set<string>>(LINE_NAMES.map((line) => [line, new Set<string>()]));

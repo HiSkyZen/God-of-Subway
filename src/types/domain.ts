@@ -5,11 +5,9 @@ export type ResolvedMode = "DAY" | "SAT" | "END";
 export type LineName =
   | "1호선" | "2호선" | "3호선" | "4호선" | "5호선" | "6호선" | "7호선" | "8호선" | "9호선"
   | "경의중앙선" | "수인분당선" | "경춘선" | "경강선" | "서해선" | "공항철도" | "신분당선"
-  | "인천1호선" | "인천2호선" | "용인에버라인" | "김포골드라인" | "의정부경전철" | "우이신설선" | "신림선"
   | "GTX-A(북부)" | "GTX-A(남부)";
 
-export const TIMETABLE_ONLY_LINES: readonly LineName[] = ["인천1호선", "인천2호선", "용인에버라인", "김포골드라인", "의정부경전철", "우이신설선", "신림선"];
-export const EXTRA_LINES: readonly LineName[] = ["경의중앙선", "수인분당선", "경춘선", "경강선", "서해선", "공항철도", "신분당선", ...TIMETABLE_ONLY_LINES, "GTX-A(북부)", "GTX-A(남부)"];
+export const EXTRA_LINES: readonly LineName[] = ["경의중앙선", "수인분당선", "경춘선", "경강선", "서해선", "공항철도", "신분당선", "GTX-A(북부)", "GTX-A(남부)"];
 export const LINE_NAMES: readonly LineName[] = [
   "1호선", "2호선", "3호선", "4호선", "5호선", "6호선", "7호선", "8호선", "9호선", ...EXTRA_LINES,
 ];
@@ -34,23 +32,7 @@ export interface Candidate {
   location_kind: "live" | "expected"; location_label: string; confidence: "높음" | "중간" | "낮음";
   method: string; projected: boolean; [key: string]: unknown;
 }
-export interface TransferInfo {
-  station: string;
-  seconds: number;
-  base_seconds?: number;
-  distance_m: number | null;
-  alight_position: string;
-  board_position: string;
-  from_direction: string;
-  to_direction: string;
-  matched: string;
-  mode?: "walk" | "same-platform" | "cross-platform" | "passage" | "branch" | "estimated";
-  source?: string;
-  note?: string;
-  crowding_multiplier?: number;
-  crowding_level?: string;
-  predicted_load?: number;
-}
+export interface TransferInfo { station: string; seconds: number; distance_m: number | null; alight_position: string; board_position: string; from_direction: string; to_direction: string; matched: string; }
 export interface PathEdge { from: [string, string]; to: [string, string]; kind: "ride" | "transfer" | "start" | "end"; weight: number; }
 export interface Path { start: string; end: string; seconds: number; edges: PathEdge[]; }
 export interface Diagnostics { positions: number; matched: number; unmatched_train: string[]; unmatched_station: string[]; matched_context?: number; realtime_available?: boolean; realtime_error?: string; realtime_query?: string; cache_state?: string; [key: string]: unknown; }

@@ -107,17 +107,3 @@ html[data-theme="dark"] .time-strip .selected-time{background:var(--action);bord
   .time-strip button{font-size:9.2px}
   .time-strip .selected-time{font-size:10px}
 }
-
-/* Station suggestion overlay and line SVG badges. */
-.search-card{position:relative;z-index:30;overflow:visible}
-.search-panel{position:relative;z-index:2;overflow:visible}
-.station-control{z-index:1;overflow:visible}
-.station-control:focus-within{z-index:100}
-.station-control .input-wrap{overflow:visible}
-.station-control .suggestions{z-index:1000;max-height:min(360px,52vh);overflow-x:hidden;overflow-y:auto}
-.suggestions button{display:flex;align-items:center;gap:10px;min-height:46px}
-.suggestion-badges{display:inline-flex;align-items:center;gap:4px;flex:0 0 auto;min-width:24px}
-.line-badge-svg{display:block;overflow:visible;flex:0 0 auto}
-.line-badge-svg text{font-family:Inter,Pretendard,"Noto Sans KR",system-ui,sans-serif;pointer-events:none}
-.suggestion-station{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:14px;font-weight:750;color:inherit}
-.time-strip{position:relative;z-index:1}

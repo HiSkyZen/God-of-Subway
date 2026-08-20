@@ -1,6 +1,6 @@
 import type { AutoRoutePayload, CalculateRoutePayload, LiveTripPayload, PositionRow, SegmentInput, Serialized } from "../types/domain";
 import { fetchPosition, formatGtxTrainNumber, positionRows, type FetchLike } from "./realtime-service";
-import { autoCandidateRoutes, candidateInterchanges, routeConfidence, transferSeconds as resolvedTransferSeconds } from "./routing-service";
+import { autoCandidateRoutes, candidateInterchanges, routeConfidence } from "./routing-service";
 import { scheduledGtxCandidates } from "./gtx-schedule";
 import { GTX_LINES, GTX_LINE_NAMES, gtxDirection, gtxDuration, gtxLineForPair, gtxLineForStation, gtxSecondsBetween, isGtxLine, type GtxLine } from "./gtx-topology";
 import { canonStation, formatKst, nowKst, parseDt, resolveServiceMode } from "./timetable-service";
@@ -8,6 +8,7 @@ import { canonStation, formatKst, nowKst, parseDt, resolveServiceMode } from "./
 export { GTX_LINES, GTX_LINE_NAMES, gtxLineForPair, gtxLineForStation, isGtxLine } from "./gtx-topology";
 export type { GtxLine } from "./gtx-topology";
 
+const DEFAULT_TRANSFER_SECONDS = 240;
 const MAX_BOARD_WAIT_SECONDS = 3600;
 
 type BaseRoute = (payload: CalculateRoutePayload) => Promise<Serialized>;
@@ -31,18 +32,10 @@ function asSegments(result: Serialized): Array<Record<string, unknown>> {
 }
 function resultArrival(result: Serialized): string { return String(result.arrival_time ?? result.estimated_arrival_time ?? ""); }
 function resultWarnings(result: Serialized): string[] { return Array.isArray(result.warnings) ? result.warnings.filter((value): value is string => typeof value === "string") : []; }
-function transferSeconds(segment: SegmentInput, next?: SegmentInput): number {
-  if (!next) return 0;
-  const explicit = Number(segment.transfer_seconds ?? Math.round(Number(segment.transfer_walk ?? Number.NaN) * 60));
-  if (Number.isFinite(explicit) && explicit >= 0) {
-    const value = Math.round(explicit);
-    return value === 240 ? 247 : value;
-  }
-  const station = canonStation(String(segment.to || next.from || ""));
-  const fromLine = String(segment.line || "");
-  const toLine = String(next.line || "");
-  if (!station || !fromLine || !toLine || fromLine === toLine) return 0;
-  return resolvedTransferSeconds(station, fromLine, toLine);
+function transferSeconds(segment: SegmentInput, hasNext: boolean): number {
+  if (!hasNext) return 0;
+  const value = Number(segment.transfer_seconds ?? Math.round(Number(segment.transfer_walk ?? 0) * 60));
+  return Number.isFinite(value) && value > 0 ? Math.round(value) : DEFAULT_TRANSFER_SECONDS;
 }
 function addSeconds(date: Date, seconds: number): Date { return new Date(date.getTime() + seconds * 1000); }
 function candidateLine(line: GtxLine, from: string, to: string): { fromName: string; toName: string; fi: number; ti: number; wanted: 1 | -1 } {
@@ -339,7 +332,7 @@ export async function calculateGtxHybridRoute(payload: CalculateRoutePayload, ba
     const arrival = resultArrival(result);
     if (!segments.length || !arrival) return { ok: false, failed_segment: index + 1, error: "구간 도착시각을 계산하지 못했습니다.", partial_segments: results };
     const segment = segments[0];
-    const walk = transferSeconds(input, payload.segments[index + 1]);
+    const walk = transferSeconds(input, index < payload.segments.length - 1);
     segment.transfer_seconds = walk;
     segment.transfer_walk = walk / 60;
     segment.transfer_info = index < payload.segments.length - 1 ? (input.transfer_info ?? null) : null;
@@ -374,9 +367,7 @@ export async function calculateGtxHybridAuto(payload: AutoRoutePayload, baseRout
   if (!scored.length) {
     return { ok: false, from: canonStation(payload.from), to: canonStation(payload.to), error: "현재 시각 이후 이용 가능한 열차 경로를 찾지 못했습니다.", service_mode: mode, service_mode_reason: reason };
   }
-  scored.sort((a, b) => String(a.result.arrival_time).localeCompare(String(b.result.arrival_time))
-    || Number(a.segments.some((segment) => isGtxLine(String(segment.line)))) - Number(b.segments.some((segment) => isGtxLine(String(segment.line))))
-    || a.segments.length - b.segments.length || a.path.seconds - b.path.seconds);
+  scored.sort((a, b) => String(a.result.arrival_time).localeCompare(String(b.result.arrival_time)) || a.segments.length - b.segments.length || a.path.seconds - b.path.seconds);
   const selected = scored[0];
   const selectedSegments = asSegments(selected.result);
   const alternatives = scored.slice(1, 4).map((item) => ({
@@ -424,7 +415,7 @@ export async function calculateGtxHybridTrip(payload: LiveTripPayload, baseTrip:
   if (!results.length) return { ok: false, error: "추적 구간 결과가 없습니다." };
   let cursor = parseDt(String(results[0].alight_dt ?? activeResult.arrival_time));
   const warnings = resultWarnings(activeResult);
-  const firstTransfer = transferSeconds(active, payload.segments[activeIndex + 1]);
+  const firstTransfer = transferSeconds(active, activeIndex < payload.segments.length - 1);
   results[0].transfer_seconds = firstTransfer;
   results[0].transfer_walk = firstTransfer / 60;
   results[0].transfer_info = activeIndex < payload.segments.length - 1 ? (active.transfer_info ?? null) : null;
@@ -438,7 +429,7 @@ export async function calculateGtxHybridTrip(payload: LiveTripPayload, baseTrip:
     const arrival = resultArrival(next);
     if (!nextSegments.length || !arrival) return { ok: false, failed_segment: index + 1, error: "후속 구간 도착시각을 계산하지 못했습니다.", segments: results };
     const segment = nextSegments[0];
-    const walk = transferSeconds(input, payload.segments[index + 1]);
+    const walk = transferSeconds(input, index < payload.segments.length - 1);
     segment.transfer_seconds = walk;
     segment.transfer_walk = walk / 60;
     segment.transfer_info = index < payload.segments.length - 1 ? (input.transfer_info ?? null) : null;

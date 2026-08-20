@@ -1,7 +1,12 @@
-# GTX-A 시간표/토폴로지 데이터
+# GTX-A timetable source notes
 
-GTX-A는 북부(운정중앙–서울역)와 남부(수서–동탄)가 현재 분리 운행되므로 엔진에서도 `GTX-A(북부)`, `GTX-A(남부)` 두 계통으로 관리합니다. 일반 지하철 그래프와 후보 생성 단계에서 함께 비교하지만, 두 구간 사이를 존재하지 않는 직통 서비스로 연결하지 않습니다.
+The runtime GTX-A schedule uses the published service-train numbering convention present in the public timetable export reviewed for this change.
 
-GTX-A 열차번호는 내부 추적 식별자와 UI 표시값을 분리합니다. 외부 응답에는 `X` + 네 자리 형식을 사용하고, 경로 후보의 동률에서는 GTX-A를 이용하지 않는 경로가 같은 도착시각이면 비GTX 경로를 우선합니다.
+- South section, 수서 → 동탄: `X0001`, `X0003`, `X0005`, …
+- South section, 동탄 → 수서: `X0002`, `X0004`, `X0006`, …
+- North section, 운정중앙 → 서울역: `X1001`, `X1003`, `X1005`, …
+- North section, 서울역 → 운정중앙: `X1002`, `X1004`, `X1006`, …
 
-실제 시각표/역 순서 변경 시 `src/engine/gtx-topology.ts`, 관련 테스트, `healthSnapshot()`의 섹션 정보를 함께 갱신하십시오.
+Reference export inspected: `HunRotation/HunRotation.github.io/sonicmetro/data/GTX-A_{상행,하행}_{평일,주말}.csv`, validity metadata beginning 2025-05-01 and source build date 2025-08-12. The export distinguishes `평일` and `주말`; the engine keeps `DAY`, `SAT`, and `END` as separate service-mode contracts, with `SAT` and `END` currently mapped to the published weekend table rather than inventing a Sunday-only timetable that is not present in that source.
+
+Realtime API rows are used only to refine location/ETA. Public GTX-A service numbers are normalized to `X####` and timetable-only candidates also carry their real `X####` number, so no `GTX-SCHED-*` identifier is user-visible or required for normal tracking.
