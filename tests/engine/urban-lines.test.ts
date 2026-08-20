@@ -6,10 +6,10 @@ import { isDisjointHomonymTransfer } from "../../src/engine/station-identity";
 import { transferPairInfo, transferSeconds } from "../../src/engine/routing-service";
 import { fetchPosition } from "../../src/engine/realtime-service";
 
-const EXPECTED = ["인천1호선", "인천2호선", "용인에버라인", "김포골드라인", "의정부경전철"].sort();
+const EXPECTED = ["인천1호선", "인천2호선", "용인에버라인", "김포골드라인", "의정부경전철", "우이신설선", "신림선"].sort();
 
 describe("timetable-only urban rail", () => {
-  test("all five lines expose stations and weekday/holiday service", () => {
+  test("all seven lines expose stations and weekday/holiday service", () => {
     expect([...TIMETABLE_ONLY_LINES].map(String).sort()).toEqual(EXPECTED);
     const options = stationOptions();
     for (const line of EXPECTED) {
@@ -22,12 +22,28 @@ describe("timetable-only urban rail", () => {
     }
   });
 
+  test("crawled terminal departure arrays retain first service at 05:30", () => {
+    for (const [line, from, to] of [
+      ["우이신설선", "북한산우이", "신설동"],
+      ["신림선", "샛강", "관악산(서울대)"],
+    ] as const) {
+      for (const mode of ["DAY", "END"] as const) {
+        const first = routeTrains(line, mode, from, to)[0];
+        expect(first).toBeDefined();
+        const origin = first?.stops.find((stop) => canonStation(stop.station) === canonStation(from));
+        expect(origin?.dep ?? origin?.arr).toBe(5 * 3600 + 30 * 60);
+      }
+    }
+  });
+
   test("timetable-only realtime lookup never waits for the network", async () => {
-    let called = false;
-    const fakeFetch = async (): Promise<Response> => { called = true; return new Response("unexpected"); };
-    const result = await fetchPosition("인천1호선", 5, fakeFetch);
-    expect(result.ok).toBe(false);
-    expect(called).toBe(false);
+    for (const line of ["인천1호선", "우이신설선", "신림선"] as const) {
+      let called = false;
+      const fakeFetch = async (): Promise<Response> => { called = true; return new Response("unexpected"); };
+      const result = await fetchPosition(line, 5, fakeFetch);
+      expect(result.ok).toBe(false);
+      expect(called).toBe(false);
+    }
   });
 
   test("every feasible same-station line pair has explicit runtime transfer data and never uses 240 seconds", () => {
@@ -56,7 +72,7 @@ describe("timetable-only urban rail", () => {
         checked += 1;
       }
     }
-    expect(checked).toBeGreaterThan(50);
+    expect(checked).toBeGreaterThan(60);
   });
 
   test("new interchange pairs are routable", () => {
@@ -67,6 +83,10 @@ describe("timetable-only urban rail", () => {
       ["기흥","용인에버라인","수인분당선"],
       ["김포공항","김포골드라인","9호선"],
       ["회룡","의정부경전철","1호선"],
+      ["신설동","우이신설선","1호선"],
+      ["보문","우이신설선","6호선"],
+      ["샛강","신림선","9호선"],
+      ["신림","신림선","2호선"],
     ] as const) {
       expect(transferPairInfo(station, a, b)).not.toBeNull();
       expect(transferSeconds(station, a, b)).toBeGreaterThan(0);

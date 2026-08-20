@@ -27,9 +27,16 @@ describe("transit routing overhaul", () => {
   });
 
 
-  test("rush-hour crowding weight is bounded at 1.75 and off-peak is neutral", () => {
-    const peak = transferLoadEstimate("서울역", new Date(Date.UTC(2026, 7, 20, 8, 0, 0)), 4);
-    const offPeak = transferLoadEstimate("서울역", new Date(Date.UTC(2026, 7, 20, 13, 0, 0)), 4);
-    expect(peak.multiplier).toBeGreaterThan(1); expect(peak.multiplier).toBeLessThanOrEqual(1.75); expect(offPeak.multiplier).toBe(1);
+  test("rush-hour crowding applies only 06:50-09:30 and 16:50-19:30", () => {
+    const estimate = (hour: number, minute: number) => transferLoadEstimate("서울역", new Date(Date.UTC(2026, 7, 20, hour, minute, 0)), 4).multiplier;
+    expect(estimate(6, 49)).toBe(1);
+    expect(estimate(6, 50)).toBeGreaterThan(1);
+    expect(estimate(8, 0)).toBeLessThanOrEqual(1.75);
+    expect(estimate(9, 30)).toBeGreaterThan(1);
+    expect(estimate(9, 31)).toBe(1);
+    expect(estimate(16, 49)).toBe(1);
+    expect(estimate(16, 50)).toBeGreaterThan(1);
+    expect(estimate(19, 30)).toBeGreaterThan(1);
+    expect(estimate(19, 31)).toBe(1);
   });
 });

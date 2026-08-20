@@ -111,7 +111,7 @@ export function modeledMissingTransferSeconds(
     seconds = Math.max(30, Math.round(distanceM / 1.1 + 25));
   } else {
     const compactLines = `${fromLine}|${toLine}`;
-    const lightRail = /경전철|골드|에버|인천/u.test(compactLines);
+    const lightRail = /경전철|골드|에버|인천|우이신설|신림/u.test(compactLines);
     const base = lightRail ? 172 : 158;
     const variation = (stableTransferHash(`${canonStation(station)}|${[fromLine, toLine].sort().join("|")}`) % 46) - 14;
     seconds = Math.round(base + Math.max(0, lineCount - 2) * 24 + variation);
@@ -124,8 +124,10 @@ function minutes(date: Date): number { return date.getUTCHours() * 60 + date.get
 function ramp(value: number, start: number, peakStart: number, peakEnd: number, end: number): number {
   if (value < start || value > end) return 0;
   if (value >= peakStart && value <= peakEnd) return 1;
-  if (value < peakStart) return (value - start) / Math.max(1, peakStart - start);
-  return (end - value) / Math.max(1, end - peakEnd);
+  const linear = value < peakStart
+    ? (value - start) / Math.max(1, peakStart - start)
+    : (end - value) / Math.max(1, end - peakEnd);
+  return 0.15 + Math.max(0, Math.min(1, linear)) * 0.85;
 }
 
 /** Project dates are KST wall-clock values represented as UTC fields, matching nowKst(). */
@@ -133,8 +135,8 @@ export function transferLoadEstimate(station: string, at: Date, lineCount = 2): 
   const day = at.getUTCDay();
   if (day === 0 || day === 6) return { multiplier: 1, peakIntensity: 0, stationDemand: 0, predictedLoad: 0, label: "평시" };
   const minute = minutes(at);
-  const morning = ramp(minute, 6 * 60 + 30, 7 * 60 + 30, 8 * 60 + 50, 10 * 60);
-  const evening = ramp(minute, 16 * 60 + 30, 17 * 60 + 40, 19 * 60 + 10, 20 * 60 + 30);
+  const morning = ramp(minute, 6 * 60 + 50, 7 * 60 + 30, 8 * 60 + 50, 9 * 60 + 30);
+  const evening = ramp(minute, 16 * 60 + 50, 17 * 60 + 40, 19 * 60 + 10, 19 * 60 + 30);
   const peakIntensity = Math.max(morning, evening);
   if (peakIntensity <= 0) return { multiplier: 1, peakIntensity: 0, stationDemand: 0, predictedLoad: 0, label: "평시" };
   const stationDemand = Math.min(1, HUB_DEMAND[canonStation(station)] ?? (0.34 + Math.max(0, lineCount - 1) * 0.12));

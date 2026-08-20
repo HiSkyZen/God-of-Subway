@@ -36,11 +36,17 @@ function sanitizedTransfers(value: unknown): EngineData["transfers"] {
 }
 
 interface UrbanWindow { 0: number; 1: number; 2: number }
+interface UrbanModeDefinition {
+  forward?: UrbanWindow[];
+  reverse?: UrbanWindow[];
+  forward_departures?: number[];
+  reverse_departures?: number[];
+}
 interface UrbanLineDefinition {
   stations?: string[];
   segment_seconds?: number[];
-  weekday?: { forward?: UrbanWindow[]; reverse?: UrbanWindow[] };
-  holiday?: { forward?: UrbanWindow[]; reverse?: UrbanWindow[] };
+  weekday?: UrbanModeDefinition;
+  holiday?: UrbanModeDefinition;
 }
 function generatedUrbanLines(value: unknown): EngineData["extra"] {
   const result: EngineData["extra"] = {};
@@ -58,6 +64,11 @@ function generatedUrbanLines(value: unknown): EngineData["extra"] {
     for (const [directionKey, orderedStations, orderedSeconds] of directions) {
       const windows = Array.isArray(modeCfg[directionKey]) ? modeCfg[directionKey] as UrbanWindow[] : [];
       const departures = new Set<number>();
+      const exactDepartures = directionKey === "forward" ? modeCfg.forward_departures : modeCfg.reverse_departures;
+      for (const rawDeparture of exactDepartures ?? []) {
+        const departure = Math.trunc(Number(rawDeparture));
+        if (Number.isFinite(departure) && departure >= 0) departures.add(departure);
+      }
       for (const rawWindow of windows) {
         const start = Math.trunc(Number(rawWindow?.[0]));
         const end = Math.trunc(Number(rawWindow?.[1]));

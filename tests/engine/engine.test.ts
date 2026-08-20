@@ -19,9 +19,9 @@ describe("지금타 Bun engine", () => {
   test("KST naive clock and aliases stay stable", () => { const value = clockDtNear("10:30:00", nowKst()); expect(value.getUTCHours()).toBe(10); expect(canonStation("총신대입구 역")).toBe("총신대입구(이수)"); });
   test("service mode resolves manual mode without host timezone", () => { const [mode, reason] = resolveServiceMode("DAY", nowKst()); expect(mode).toBe("DAY"); expect(reason).toBe("평일 수동 선택"); });
   test("all supported lines expose station options including Shinbundang and both GTX-A sections", () => {
-    expect(Object.keys(stationsByLine)).toHaveLength(23);
+    expect(Object.keys(stationsByLine)).toHaveLength(25);
     expect(stationsByLine["2호선"]).toContain("강남"); expect(stationsByLine["공항철도"]).toContain("서울역");
-    expect(stationsByLine["신분당선"]).toContain("강남"); expect(stationsByLine["GTX-A(북부)"]).toEqual(["운정중앙", "킨텍스", "대곡", "연신내", "서울역"]); expect(stationsByLine["GTX-A(남부)"]).toEqual(["수서", "성남", "구성", "동탄"]);
+    expect(stationsByLine["신분당선"]).toContain("강남"); expect(stationsByLine["우이신설선"]).toContain("신설동"); expect(stationsByLine["신림선"]).toContain("샛강"); expect(stationsByLine["GTX-A(북부)"]).toEqual(["운정중앙", "킨텍스", "대곡", "연신내", "서울역"]); expect(stationsByLine["GTX-A(남부)"]).toEqual(["수서", "성남", "구성", "동탄"]);
   });
   test("route graph finds a direct timetable path", () => { const path = autoFindPath("강남", "잠실", "DAY"); expect(path.edges.length).toBeGreaterThan(0); expect(path.seconds).toBeGreaterThan(0); });
   test("교대 transfer chooses the exact incoming/outgoing direction record", () => { expect(bestTransferDetail("교대", { line: "2호선", from: "강남", to: "교대" }, { line: "3호선", from: "교대", to: "고속터미널" }, "DAY")).toMatchObject({ station: "교대", distance_m: 75, alight_position: "1-2", board_position: "7-4", matched: "direction" }); });
@@ -32,7 +32,7 @@ describe("지금타 Bun engine", () => {
     expect(shouldPreferNonGtxTie(withGtx, withoutGtx)).toBe(true);
     expect(shouldPreferNonGtxTie(withGtx, { ...withoutGtx, arrival_time: "2026-08-18 10:31:00" })).toBe(false);
   });
-  test("data repository parses schedule payloads only when requested", () => { const lazy = new JsonDataRepository(); expect(lazy.loadedDatasets()).toEqual([]); expect(lazy.validate()).toMatchObject({ stationLines: 21, graphModes: ["DAY", "SAT", "END"] }); expect(lazy.loadedDatasets()).toEqual(["graph"]); expect(Object.keys(lazy.data.s1.weekday)).toHaveLength(843); expect(lazy.loadedDatasets()).toEqual(["graph", "s1-weekday"]); });
+  test("data repository parses schedule payloads only when requested", () => { const lazy = new JsonDataRepository(); expect(lazy.loadedDatasets()).toEqual([]); expect(lazy.validate()).toMatchObject({ stationLines: 23, graphModes: ["DAY", "SAT", "END"] }); expect(lazy.loadedDatasets()).toEqual(["graph"]); expect(Object.keys(lazy.data.s1.weekday)).toHaveLength(843); expect(lazy.loadedDatasets()).toEqual(["graph", "s1-weekday"]); });
   test("Shinbundang timetable uses internal indexes instead of DX labels", () => {
     const lazy = new JsonDataRepository(); const trains = lazy.data.extra["신분당선"].trains?.weekday ?? {}; const keys = Object.keys(trains);
     expect(keys.length).toBeGreaterThan(0); expect(keys[0]).toStartWith("SB-W-"); expect(keys.some((key) => key.startsWith("DX"))).toBe(false); expect(JSON.stringify(trains)).not.toContain("DX9");
