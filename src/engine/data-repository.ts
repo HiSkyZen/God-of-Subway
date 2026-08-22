@@ -1,5 +1,6 @@
 import { Database } from "bun:sqlite";
-import { existsSync } from "node:fs";
+import { copyFileSync, existsSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { dirname, resolve } from "node:path";
 import type { EngineData, RawMetroTrain, RawTrain, RawTransfer } from "../types/domain";
 
@@ -8,13 +9,27 @@ type ServiceDay = "DAY" | "SAT" | "END";
 
 const ROOT = resolve(dirname(import.meta.path), "../..");
 const EXTRA_LINES = ["경의중앙선", "수인분당선", "경춘선", "경강선", "서해선", "공항철도", "신분당선", "인천1호선", "인천2호선", "용인에버라인", "김포골드라인", "의정부경전철", "우이신설선", "신림선", "GTX-A(북부)", "GTX-A(남부)"] as const;
+let vercelRuntimeCopy: string | null = null;
 
 function transitDbCandidates(): string[] {
   const configured = Bun.env.TRANSIT_DB_PATH?.trim();
   return [configured ? resolve(configured) : "", resolve(ROOT, "data/transit.sqlite"), resolve(process.cwd(), "data/transit.sqlite"), resolve(dirname(import.meta.path), "../../data/transit.sqlite"), resolve(dirname(import.meta.path), "../../../data/transit.sqlite")].filter(Boolean);
 }
+
+function runtimeReadableDbPath(source: string): string {
+  if (Bun.env.VERCEL !== "1") return source;
+  const scratchRoot = resolve(tmpdir());
+  if (source === scratchRoot || source.startsWith(`${scratchRoot}/`)) return source;
+  if (vercelRuntimeCopy && existsSync(vercelRuntimeCopy)) return vercelRuntimeCopy;
+  const deployment = (Bun.env.VERCEL_DEPLOYMENT_ID || "runtime").replace(/[^a-zA-Z0-9_-]/g, "_");
+  const target = resolve(scratchRoot, `jigeumta-transit-${deployment}.sqlite`);
+  if (!existsSync(target)) copyFileSync(source, target);
+  vercelRuntimeCopy = target;
+  return target;
+}
+
 export function transitDbPath(): string {
-  for (const candidate of transitDbCandidates()) if (existsSync(candidate)) return candidate;
+  for (const candidate of transitDbCandidates()) if (existsSync(candidate)) return runtimeReadableDbPath(candidate);
   throw new Error("SQLite 철도 데이터베이스를 찾지 못했습니다. 먼저 bun run build:data를 실행하세요.");
 }
 
