@@ -1,6 +1,6 @@
 # Experiment Guide
 
-클라이언트의 실험 모드는 추천 ETA와 실제 탑승/도착 결과를 비교하기 위한 로컬 기록 기능입니다. 실험 데이터는 브라우저 저장소에 보관되며 CSV/JSON으로 내보낼 수 있습니다.
+클라이언트의 실험 모드는 추천 ETA와 실제 탑승/도착 결과를 비교하기 위한 로컬 기록 기능입니다. 실험 데이터는 브라우저 저장소에 보관되며 CSV/JSON으로 내보낼 수 있습니다. 여기서 CSV/JSON은 **사용자 실험 내보내기 형식**일 뿐 런타임 철도 데이터 저장 형식이 아닙니다.
 
 ## 기록 항목
 
@@ -20,4 +20,12 @@
 
 환승시간 비교 실험에서는 `transfer_info.base_seconds`, `transfer_info.seconds`, `crowding_multiplier`, `mode`를 함께 확인해야 합니다. `mode=same-platform`은 0초가 정상 값입니다.
 
-실험 기록은 운영 정답 데이터로 자동 승격되지 않습니다. 데이터 보정이 필요하면 별도 검증 후 `data/transfer_data.json` 또는 `transfer-policy.ts`에 provenance와 함께 반영하십시오.
+## 운영 데이터 반영
+
+실험 기록은 운영 정답 데이터로 자동 승격되지 않습니다. 보정 후보는 공식/현장 근거를 별도로 검증한 뒤 다음 경로 중 적절한 곳에 provenance와 함께 반영합니다.
+
+- 공식 환승 거리/시간 원천 변경: `datasets/transfers/`의 검토 가능한 TSV
+- 승강장 구조·공용선로 같은 물리 예외: `src/engine/transfer-policy.ts`
+- 수집/정규화 규칙 변경: `scripts/transit-build/`
+
+변경 후 `bun run build:data`, `bun run doctor`, `bun run audit:transfers`, 전체 테스트를 통과시켜 SQLite 산출물과 런타임 정책이 일치하는지 확인합니다. 생성된 `data/transit.sqlite` 자체나 과거 런타임 JSON을 수동 편집하지 않습니다.
