@@ -1,0 +1,27 @@
+{
+  "$schema": "./node_modules/wrangler/config-schema.json",
+
+  "name": "jigumta-push-scheduler",
+  "main": "src/index.ts",
+  "compatibility_date": "2026-08-19",
+
+  "triggers": {
+    "crons": [
+      "* * * * *"
+    ]
+  },
+
+  "vars": {
+    "DISPATCH_URL": "https://jigumta.vercel.app/api/push/dispatch"
+  },
+
+  "secrets": {
+    "required": [
+      "CRON_SECRET"
+    ]
+  },
+
+  "observability": {
+    "enabled": true
+  }
+}
