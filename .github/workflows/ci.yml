@@ -7,13 +7,18 @@ on:
 jobs:
   verify:
     runs-on: ubuntu-latest
+    env:
+      TRANSIT_DATA_MODE: fixture
     steps:
       - uses: actions/checkout@v6
       - uses: oven-sh/setup-bun@v2
         with:
           bun-version-file: .bun-version
       - run: bun install --frozen-lockfile
+      - run: bun run build:data
       - run: bun run check
-      - run: bun run build:all
+      - run: bun run build
+      - run: bun run build:client
+      - run: bun run scripts/promote-static.ts
       - run: bun run verify:pwa
       - run: bun run verify:aot
