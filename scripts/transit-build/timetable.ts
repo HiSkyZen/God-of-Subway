@@ -1,6 +1,6 @@
 import { Database } from "bun:sqlite";
 import type { TransitServiceDay } from "../../src/infra/transit-schema";
-import { DAYS, KRIC_BASE, buildSource, cleanName, collectApiRows, kricJson, parseClock, rowValue, serviceKind, servicePriority, type Event, type SourceRow, type StationRow } from "./common";
+import { ALLOW_PARTIAL, BUILD_CONCURRENCY, DAYS, KRIC_BASE, buildSource, cleanName, collectApiRows, kricJson, mapConcurrent, parseClock, rowValue, serviceKind, servicePriority, type ApiRow, type Event, type SourceRow, type StationRow } from "./common";
 
 export function insertTrip(db: Database, line: string, day: TransitServiceDay, trainNo: string, direction: string, kind: string, sourceIds: string[], events: Event[]): void {
   if (events.length < 2) return;
@@ -8,7 +8,8 @@ export function insertTrip(db: Database, line: string, day: TransitServiceDay, t
   const deduped: Event[] = [];
   for (const event of ordered) { const last = deduped.at(-1); if (last && last.stationId === event.stationId && (last.departure ?? last.arrival) === (event.departure ?? event.arrival)) continue; deduped.push(event); }
   if (deduped.length < 2) return;
-  if (line === "공항철도" && (kind === "direct" || (deduped.length <= 4 && deduped.some((e) => e.station === "서울역") && deduped.some((e) => e.station.startsWith("인천공항"))))) return;
+  const isAirportDirect = line === "공항철도" && (kind === "direct" || (deduped.length <= 4 && deduped.some((event) => event.station === "서울역") && deduped.some((event) => event.station.startsWith("인천공항"))));
+  if (isAirportDirect) return;
   const actualKind = kind === "direct" ? "local" : kind;
   db.query(`INSERT OR IGNORE INTO trip(logical_line,service_day,train_no,direction,service_kind,service_priority,origin_station_id,destination_station_id) VALUES (?,?,?,?,?,?,?,?)`).run(line, day, trainNo, direction, actualKind, servicePriority(actualKind), deduped[0].stationId, deduped.at(-1)!.stationId);
   const tripId = Number((db.query(`SELECT trip_id FROM trip WHERE logical_line=? AND service_day=? AND train_no=?`).get(line, day, trainNo) as { trip_id: number }).trip_id);
@@ -32,30 +33,52 @@ export function deriveRideEdges(db: Database): void {
 }
 
 function inferDirection(events: Event[]): string { if (events.length < 2) return ""; const ordered=[...events].sort((a,b)=>(a.departure??a.arrival??0)-(b.departure??b.arrival??0)); const a=ordered[0].sequenceHint, b=ordered.at(-1)!.sequenceHint; return a === b ? "" : a < b ? "DOWN" : "UP"; }
+function timetableRows(payload: unknown): ApiRow[] { return collectApiRows(payload, (row) => rowValue(row, "trnNo", "trainNo") !== undefined && rowValue(row, "arvTm", "dptTm", "arrTm", "depTm") !== undefined); }
+
+type TimetableJob = { source: SourceRow; station: StationRow; stationId: number; day: TransitServiceDay; dayCd: string };
+type TimetableResult = { job: TimetableJob; rows: ApiRow[]; source: "exp" | "station" | "empty" };
+
+async function fetchTimetable(job: TimetableJob): Promise<TimetableResult> {
+  const params = { railOprIsttCd: job.source.operator_code, lnCd: job.source.line_code, stinCd: job.station.station_code, dayCd: job.dayCd };
+  let expError = "";
+  try {
+    const rows = timetableRows(await kricJson("trainUseInfo/subwayTimetableExp", params));
+    if (rows.length) return { job, rows, source: "exp" };
+  } catch (error) { expError = error instanceof Error ? error.message : String(error); }
+  try {
+    const rows = timetableRows(await kricJson("convenientInfo/stationTimetable", params));
+    return { job, rows, source: rows.length ? "station" : "empty" };
+  } catch (error) {
+    const fallbackError = error instanceof Error ? error.message : String(error);
+    const message = `${job.source.source_id}/${job.station.station_code}/${job.day}: exp=${expError || "empty"}; station=${fallbackError}`;
+    if (!ALLOW_PARTIAL) throw new Error(`KRIC 시간표 요청 실패: ${message}`);
+    console.warn(`[build:data] partial timetable: ${message}`);
+    return { job, rows: [], source: "empty" };
+  }
+}
 
 export async function loadLiveTimetables(db: Database, sources: SourceRow[], stations: StationRow[]): Promise<number> {
-  const sourceMap = new Map(sources.map((row) => [row.source_id, row])); const stationBySource = new Map<string, StationRow[]>();
-  for (const row of stations) stationBySource.set(row.source_id, [...(stationBySource.get(row.source_id) ?? []), row]);
-  const events = new Map<string, Event[]>(); let apiRows = 0; let requests = 0;
-  for (const [sourceId, list] of stationBySource) {
-    const source = sourceMap.get(sourceId); if (!source || source.timetable === "0") continue;
-    for (const station of list) {
-      const sid = Number((db.query(`SELECT station_id FROM station_source WHERE source_id=? AND station_code=?`).get(sourceId, station.station_code) as { station_id:number }).station_id);
-      for (const [day, dayCd] of DAYS) {
-        let payload: unknown;
-        try { payload = await kricJson("trainUseInfo/subwayTimetableExp", { railOprIsttCd: source.operator_code, lnCd: source.line_code, stinCd: station.station_code, dayCd }); }
-        catch { payload = await kricJson("trainUseInfo/subwayTimetable", { railOprIsttCd: source.operator_code, lnCd: source.line_code, stinCd: station.station_code, dayCd }); }
-        requests += 1;
-        const rows = collectApiRows(payload, (row) => rowValue(row, "trnNo", "trainNo") !== undefined && rowValue(row, "arvTm", "dptTm", "arrTm", "depTm") !== undefined); apiRows += rows.length;
-        for (const raw of rows) {
-          const trainNo = String(rowValue(raw, "trnNo", "trainNo") ?? "").trim(); if (!trainNo) continue;
-          const key = `${source.logical_line}\u0001${day}\u0001${trainNo}`;
-          const event: Event = { sourceId, line: source.logical_line, day, trainNo, stationId: sid, stationCode: station.station_code, station: cleanName(station.canonical_name), arrival: parseClock(rowValue(raw,"arvTm","arrTm")), departure: parseClock(rowValue(raw,"dptTm","depTm")), sequenceHint: Number(station.sequence_hint || 0), rawKind: String(rowValue(raw,"exptCd","expressCd","trainType") ?? "") };
-          events.set(key, [...(events.get(key) ?? []), event]);
-        }
-      }
+  const sourceMap = new Map(sources.map((row) => [row.source_id, row])); const jobs: TimetableJob[] = [];
+  for (const station of stations) {
+    const source = sourceMap.get(station.source_id); if (!source || source.timetable === "0") continue;
+    const row = db.query(`SELECT station_id FROM station_source WHERE source_id=? AND station_code=?`).get(source.source_id, station.station_code) as { station_id:number } | null;
+    if (!row) continue;
+    for (const [day, dayCd] of DAYS) jobs.push({ source, station, stationId: Number(row.station_id), day, dayCd });
+  }
+
+  const results = await mapConcurrent(jobs, BUILD_CONCURRENCY, fetchTimetable);
+  const events = new Map<string, Event[]>(); let apiRows = 0; let expRows = 0; let fallbackRows = 0; let emptyRequests = 0;
+  for (const result of results) {
+    apiRows += result.rows.length; if (result.source === "exp") expRows += result.rows.length; else if (result.source === "station") fallbackRows += result.rows.length; else emptyRequests += 1;
+    const { source, station, stationId, day } = result.job;
+    for (const raw of result.rows) {
+      const trainNo = String(rowValue(raw, "trnNo", "trainNo") ?? "").trim(); if (!trainNo) continue;
+      const key = `${source.logical_line}\u0001${day}\u0001${trainNo}`;
+      const event: Event = { sourceId: source.source_id, line: source.logical_line, day, trainNo, stationId, stationCode: station.station_code, station: cleanName(station.canonical_name), arrival: parseClock(rowValue(raw,"arvTm","arrTm")), departure: parseClock(rowValue(raw,"dptTm","depTm")), sequenceHint: Number(station.sequence_hint || 0), rawKind: String(rowValue(raw,"exptCd","expressCd","trainType") ?? "") };
+      events.set(key, [...(events.get(key) ?? []), event]);
     }
   }
+
   db.transaction(() => {
     for (const [key, group] of events) {
       const [line, day, trainNo] = key.split("\u0001") as [string, TransitServiceDay, string];
@@ -63,5 +86,7 @@ export async function loadLiveTimetables(db: Database, sources: SourceRow[], sta
       insertTrip(db, line, day, trainNo, inferDirection(group), kind, group.map((event)=>event.sourceId), group);
     }
   })();
-  buildSource(db, "kric-timetable", `${KRIC_BASE}/trainUseInfo/subwayTimetableExp`, apiRows, `${requests} station/day requests; credentials omitted`); return apiRows;
+  buildSource(db, "kric-timetable-exp", `${KRIC_BASE}/trainUseInfo/subwayTimetableExp`, expRows, `${jobs.length} station/day jobs; bounded concurrency=${BUILD_CONCURRENCY}; credentials omitted`);
+  buildSource(db, "kric-station-timetable-fallback", `${KRIC_BASE}/convenientInfo/stationTimetable`, fallbackRows, `${emptyRequests} jobs remained empty after fallback; credentials omitted`);
+  return apiRows;
 }
