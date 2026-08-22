@@ -1,0 +1,71 @@
+import { Database } from "bun:sqlite";
+import { existsSync, mkdirSync, renameSync, rmSync } from "node:fs";
+import { dirname, resolve } from "node:path";
+import { TRANSIT_SCHEMA_SQL, TRANSIT_SCHEMA_VERSION } from "../src/infra/transit-schema";
+import { DAYS, ROOT, SUPPORTED_LINES, TRANSFER_SPEED_MPS, metadata } from "./transit-build/common";
+import { loadFixtureTimetables } from "./transit-build/fixture";
+import { loadHolidays, loadSeoulTransfers, loadStaticRegistry } from "./transit-build/static";
+import { deriveRideEdges, loadLiveTimetables } from "./transit-build/timetable";
+import { loadKricTransferFallback, seedFixtureMissingTransfers } from "./transit-build/transfer";
+
+const OUTPUT = resolve(ROOT, Bun.env.TRANSIT_DB_PATH?.trim() || "data/transit.sqlite");
+const TEMP = `${OUTPUT}.tmp`;
+const MODE = (Bun.env.TRANSIT_DATA_MODE?.trim().toLowerCase() || "live") === "fixture" ? "fixture" : "live";
+
+function verify(db: Database, seoulTransferCount: number): void {
+  const integrity = String((db.query(`PRAGMA integrity_check`).get() as Record<string, unknown>).integrity_check ?? "");
+  if (integrity !== "ok") throw new Error(`SQLite integrity_check failed: ${integrity}`);
+  const directArex = Number((db.query(`SELECT COUNT(*) AS n FROM trip WHERE logical_line='공항철도' AND (service_kind='direct' OR service_priority>20)`).get() as { n:number }).n);
+  if (directArex) throw new Error(`공항철도 직통 ${directArex}건이 포함되었습니다.`);
+  const retainedSeoul = Number((db.query(`SELECT COUNT(*) AS n FROM transfer_pair WHERE source='seoul-metro-2025-12-31'`).get() as { n:number }).n);
+  if (retainedSeoul !== seoulTransferCount) throw new Error(`서울교통공사 환승 원천이 보존되지 않았습니다: ${retainedSeoul}/${seoulTransferCount}`);
+  const missing: string[] = [];
+  for (const line of SUPPORTED_LINES) for (const [day] of DAYS) {
+    const count = Number((db.query(`SELECT COUNT(*) AS n FROM trip WHERE logical_line=? AND service_day=?`).get(line, day) as { n:number }).n);
+    if (!count) missing.push(`${line}/${day}`);
+  }
+  if (missing.length) throw new Error(`시간표 누락: ${missing.join(", ")}`);
+  for (const day of ["DAY", "SAT", "END"]) {
+    const count = Number((db.query(`SELECT COUNT(*) AS n FROM ride_edge WHERE service_day=?`).get(day) as { n:number }).n);
+    if (!count) throw new Error(`${day} ride_edge가 비어 있습니다.`);
+  }
+}
+
+mkdirSync(dirname(OUTPUT), { recursive: true });
+if (existsSync(TEMP)) rmSync(TEMP, { force: true });
+const db = new Database(TEMP, { create: true, strict: true });
+try {
+  db.exec(TRANSIT_SCHEMA_SQL);
+  metadata(db, "schema_version", TRANSIT_SCHEMA_VERSION);
+  metadata(db, "build_mode", MODE);
+  metadata(db, "built_at", new Date().toISOString());
+  metadata(db, "airport_direct_excluded", true);
+  metadata(db, "transfer_fallback_speed_mps", TRANSFER_SPEED_MPS);
+  metadata(db, "timetable_source", MODE === "live" ? "KRIC subwayTimetableExp" : "deterministic CI fixture");
+
+  const { sources, stations } = loadStaticRegistry(db);
+  const seoulTransferCount = loadSeoulTransfers(db);
+  loadHolidays(db);
+  if (MODE === "fixture") {
+    loadFixtureTimetables(db, sources, stations);
+    seedFixtureMissingTransfers(db);
+  } else {
+    await loadLiveTimetables(db, sources, stations);
+    await loadKricTransferFallback(db, sources, stations);
+  }
+  deriveRideEdges(db);
+  verify(db, seoulTransferCount);
+  db.exec(`PRAGMA optimize; VACUUM;`);
+  db.close();
+
+  if (existsSync(OUTPUT)) rmSync(OUTPUT, { force: true });
+  renameSync(TEMP, OUTPUT);
+  const check = new Database(OUTPUT, { readonly: true, strict: true });
+  const counts = Object.fromEntries(["station", "trip", "stop_time", "ride_edge", "transfer_pair", "holiday"].map((table) => [table, Number((check.query(`SELECT COUNT(*) AS n FROM ${table}`).get() as { n:number }).n)]));
+  check.close();
+  console.log(`[build:data] ${MODE} SQLite generated: ${JSON.stringify(counts)}`);
+} catch (error) {
+  try { db.close(); } catch { /* already closed */ }
+  if (existsSync(TEMP)) rmSync(TEMP, { force: true });
+  throw error;
+}
