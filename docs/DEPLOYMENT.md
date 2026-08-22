@@ -13,7 +13,9 @@ bun run verify:aot
 
 `build:all`은 먼저 `bun run build:data`로 SQLite를 만든 뒤 서버를 `dist/server`, 브라우저/PWA 파일을 `dist/public`으로 구성합니다. `scripts/promote-static.ts`가 Bun HTML 번들러의 해시 CSS/JS를 공개 디렉터리로 정리하고 manifest/icon URL을 안정화합니다.
 
-Vercel Function은 `vercel.json`의 `includeFiles: "data/*.sqlite"`로 SQLite를 내부 런타임 파일로 포함합니다. `/data/*` 요청은 API router에서 빈 404로 차단하여 DB를 정적 자산으로 노출하지 않습니다.
+Vercel Function은 `vercel.json`의 `includeFiles: "data/*.sqlite"`로 SQLite를 내부 런타임 파일로 포함합니다. Vercel Function의 배포 파일시스템은 immutable이므로 cold start에서 포함된 DB를 writable `/tmp`로 한 번 복사하고, 그 복사본을 `bun:sqlite` read-only 모드로 엽니다. 원본 번들 DB는 수정하지 않습니다.
+
+`/data/*`는 `dist/public`에 포함되지 않으며 API router에서도 내부 데이터 경로를 노출하지 않습니다.
 
 ## 데이터 빌드 모드
 
@@ -50,7 +52,7 @@ Preview에도 `KRIC_API_KEY`를 설정하면 기본 live 빌드를 수행할 수
 
 1. Vercel deployment state가 `READY`인지 확인합니다.
 2. `/api/health`가 `ok: true`인지 확인합니다.
-3. `/data/transit.sqlite`가 404인지 확인합니다.
+3. 내부 SQLite가 정적 파일로 제공되지 않는지 확인합니다.
 4. 역 검색에서 신촌/양평이 노선별 후보로 분리되는지 확인합니다.
 5. 대곡 경의중앙선↔서해선이 `제자리 환승`으로 표시되지 않는지 확인합니다.
 6. PWA manifest/service worker가 정상 로드되는지 확인합니다.
