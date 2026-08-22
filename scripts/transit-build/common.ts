@@ -5,7 +5,7 @@ import type { TransitServiceDay } from "../../src/infra/transit-schema";
 
 export const ROOT = resolve(import.meta.dir, "../..");
 export const DATASETS = resolve(ROOT, "datasets");
-export const KRIC_BASE = "https://openapi.kric.go.kr/openapi";
+export const KRIC_BASE = (Bun.env.KRIC_API_BASE_URL?.trim() || "https://openapi.kric.go.kr/openapi").replace(/\/$/, "");
 export const TRANSFER_SPEED_MPS = 1.2;
 export const DAYS: ReadonlyArray<[TransitServiceDay, string]> = [["DAY", "8"], ["SAT", "7"], ["END", "9"]];
 export const SUPPORTED_LINES = [
@@ -15,6 +15,14 @@ export const SUPPORTED_LINES = [
   "GTX-A(북부)", "GTX-A(남부)",
 ] as const;
 export const DISJOINT = new Set(["신촌|2호선|경의중앙선", "신촌|경의중앙선|2호선", "양평|5호선|경의중앙선", "양평|경의중앙선|5호선"]);
+
+function intEnv(name: string, fallback: number, min: number, max: number): number {
+  const value = Number(Bun.env[name] ?? fallback);
+  return Number.isFinite(value) ? Math.max(min, Math.min(max, Math.trunc(value))) : fallback;
+}
+export const BUILD_CONCURRENCY = intEnv("TRANSIT_BUILD_CONCURRENCY", 8, 1, 24);
+export const BUILD_HTTP_TIMEOUT_MS = intEnv("TRANSIT_BUILD_HTTP_TIMEOUT_MS", 15000, 3000, 60000);
+export const ALLOW_PARTIAL = /^(1|true|yes)$/i.test(Bun.env.TRANSIT_BUILD_ALLOW_PARTIAL?.trim() || "");
 
 export interface SourceRow {
   source_id: string; logical_line: string; operator_code: string; operator_name: string; line_code: string;
@@ -77,13 +85,27 @@ export function collectApiRows(value: unknown, predicate: (row: ApiRow) => boole
 export function serviceKind(raw: unknown): "local" | "express" | "direct" { const text = String(raw ?? "").trim().toLowerCase(); if (/직통|direct/.test(text)) return "direct"; if (text === "1" || /급행|특급|express|rapid/.test(text)) return "express"; return "local"; }
 export function servicePriority(kind: string): number { return kind === "express" ? 20 : 10; }
 
+export async function mapConcurrent<T, R>(items: readonly T[], limit: number, worker: (item: T, index: number) => Promise<R>): Promise<R[]> {
+  if (!items.length) return [];
+  const results = new Array<R>(items.length); let cursor = 0;
+  const run = async () => { while (true) { const index = cursor++; if (index >= items.length) return; results[index] = await worker(items[index], index); } };
+  await Promise.all(Array.from({ length: Math.min(Math.max(1, limit), items.length) }, () => run()));
+  return results;
+}
+
 function secureKey(): string { const key = Bun.env.KRIC_API_KEY?.trim() ?? ""; if (!key) throw new Error("live 데이터 빌드에는 KRIC_API_KEY 환경변수가 필요합니다."); return key; }
 export async function kricJson(endpoint: string, params: Record<string, string>, retries = 2): Promise<unknown> {
   const url = new URL(`${KRIC_BASE}/${endpoint}`); url.searchParams.set("serviceKey", secureKey()); url.searchParams.set("format", "json"); for (const [name, value] of Object.entries(params)) url.searchParams.set(name, value);
   let error = "";
   for (let attempt = 0; attempt <= retries; attempt += 1) {
-    try { const response = await fetch(url, { headers: { Accept: "application/json", "User-Agent": "JigeumTa-SQLite-Builder/1.0" } }); const text = await response.text(); if (!response.ok) throw new Error(`HTTP ${response.status}`); return JSON.parse(text); }
-    catch (cause) { error = cause instanceof Error ? cause.message : String(cause); if (attempt < retries) await Bun.sleep(250 * (attempt + 1)); }
+    const controller = new AbortController(); const timer = setTimeout(() => controller.abort(), BUILD_HTTP_TIMEOUT_MS);
+    try {
+      const response = await fetch(url, { signal: controller.signal, headers: { Accept: "application/json", "User-Agent": "JigeumTa-SQLite-Builder/1.0" } });
+      const text = await response.text(); if (!response.ok) throw new Error(`HTTP ${response.status}`); return JSON.parse(text);
+    } catch (cause) {
+      error = cause instanceof Error ? `${cause.name}: ${cause.message}` : String(cause);
+      if (attempt < retries) await Bun.sleep(250 * (attempt + 1));
+    } finally { clearTimeout(timer); }
   }
   throw new Error(`${endpoint} 호출 실패: ${error}`);
 }
