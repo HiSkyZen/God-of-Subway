@@ -10,7 +10,20 @@ import { loadKricTransferFallback, seedFixtureMissingTransfers } from "./transit
 
 const OUTPUT = resolve(ROOT, Bun.env.TRANSIT_DB_PATH?.trim() || "data/transit.sqlite");
 const TEMP = `${OUTPUT}.tmp`;
-const MODE = (Bun.env.TRANSIT_DATA_MODE?.trim().toLowerCase() || "live") === "fixture" ? "fixture" : "live";
+const requestedMode = Bun.env.TRANSIT_DATA_MODE?.trim().toLowerCase() || "";
+const hasKricKey = Boolean(Bun.env.KRIC_API_KEY?.trim());
+const vercelEnvironment = Bun.env.VERCEL_ENV?.trim().toLowerCase() || "";
+const MODE = requestedMode === "fixture"
+  ? "fixture"
+  : requestedMode === "live"
+    ? "live"
+    : vercelEnvironment === "preview" && !hasKricKey
+      ? "fixture"
+      : "live";
+
+if (!requestedMode && vercelEnvironment === "preview" && !hasKricKey) {
+  console.log("[build:data] Vercel Preview has no KRIC_API_KEY; using deterministic fixture SQLite. Production remains live-by-default.");
+}
 
 function verify(db: Database, seoulTransferCount: number): void {
   const integrity = String((db.query(`PRAGMA integrity_check`).get() as Record<string, unknown>).integrity_check ?? "");
