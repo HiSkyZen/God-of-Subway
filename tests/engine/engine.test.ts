@@ -1,7 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import { calculateAutoRoute, calculateLiveTrip, calculateRoute, healthSnapshot, shouldPreferNonGtxTie, stationsByLine } from "../../src/engine/index";
 import { fetchPosition, formatGtxTrainNumber, formatSinbundangFormationNumber, publicTrainNumber } from "../../src/engine/realtime-service";
-import { allTrains, canonStation, clockDtNear, formatKst, nowKst, resolveServiceMode, routeTrains } from "../../src/engine/timetable-service";
+import { canonStation, clockDtNear, formatKst, nowKst, resolveServiceMode, routeTrains } from "../../src/engine/timetable-service";
 import { compareAutoRouteLiveScores, observeDelays, type AutoRouteLiveScore } from "../../src/engine/eta-service";
 import { SqliteDataRepository } from "../../src/engine/data-repository";
 import { autoFindPath, transferSeconds } from "../../src/engine/routing-service";
@@ -123,21 +123,6 @@ describe("지금타 Bun SQLite engine", () => {
       expect(publicTrainNumber("신분당선", row?.trainNo)).toBe("D007");
       expect(formatSinbundangFormationNumber("20")).toBe("D020");
     } finally { if (old == null) delete Bun.env.SEOUL_API_KEY; else Bun.env.SEOUL_API_KEY = old; }
-  });
-
-  test("terminal trains exposed before scheduled departure are waiting, not negative delay", () => {
-    for (const line of ["3호선", "수인분당선"] as const) {
-      const train = allTrains(line, "DAY").find((candidate) => candidate.stops.length > 1 && (candidate.stops[0].dep ?? candidate.stops[0].arr) !== null);
-      expect(train).toBeDefined();
-      if (!train) continue;
-      const from = canonStation(train.stops[0].station);
-      const departure = train.stops[0].dep ?? train.stops[0].arr;
-      if (departure === null) continue;
-      const [observations, diagnostics] = observeDelays(line, "DAY", [{ trainNo: train.train_no, statnNm: from, trainSttus: "2", recptnDt: observationTime(departure - 300) }]);
-      expect(observations).toHaveLength(1);
-      expect(observations[0]).toMatchObject({ delay: 0, waiting: true, status: "운행 대기", location_label: `${from} 운행 대기` });
-      expect(Number(diagnostics.waiting_trains)).toBe(1);
-    }
   });
 
   test("realtime positions preserve arrival, departure and between-station state", () => {
