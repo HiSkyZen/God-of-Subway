@@ -5,7 +5,6 @@ import type { EngineData, RawMetroTrain, RawTrain, RawTransfer } from "../types/
 
 export type DatasetKey = "s1-weekday" | "s1-saturday" | "s1-holiday" | "official" | "extra" | "holidays" | "graph" | "transfers";
 type ServiceDay = "DAY" | "SAT" | "END";
-type LegacyDay = "weekday" | "saturday" | "holiday";
 
 const ROOT = resolve(dirname(import.meta.path), "../..");
 const EXTRA_LINES = ["경의중앙선", "수인분당선", "경춘선", "경강선", "서해선", "공항철도", "신분당선", "인천1호선", "인천2호선", "용인에버라인", "김포골드라인", "의정부경전철", "우이신설선", "신림선", "GTX-A(북부)", "GTX-A(남부)"] as const;
@@ -24,6 +23,11 @@ interface StopRow { trip_id: number; station: string; arrival_sec: number | null
 interface GraphRow { service_day: ServiceDay; logical_line: string; from_station: string; to_station: string; seconds: number; }
 interface PairRow { station_id: number; station: string; from_line: string; to_line: string; distance_m: number | null; seconds: number | null; source: string; }
 interface DetailRow { station_id: number; from_line: string; to_line: string; from_direction: string; to_direction: string; alight_car: string; alight_door: string; board_car: string; board_door: string; seconds: number | null; source: string; }
+
+function shinbundangInternalId(day: ServiceDay, index: number): string {
+  const mode = day === "DAY" ? "W" : day === "SAT" ? "S" : "H";
+  return `SB-${mode}-${String(index + 1).padStart(4, "0")}`;
+}
 
 export interface DataRepository {
   readonly data: EngineData;
@@ -62,7 +66,11 @@ export class SqliteDataRepository implements DataRepository {
     const trips = this.db().query(`SELECT t.trip_id, t.train_no, t.direction, t.service_kind, COALESCE(o.canonical_name,'') AS origin, COALESCE(d.canonical_name,'') AS destination FROM trip t LEFT JOIN station o ON o.station_id=t.origin_station_id LEFT JOIN station d ON d.station_id=t.destination_station_id WHERE t.logical_line=? AND t.service_day=? ORDER BY t.train_no`).all(line, day) as TripRow[];
     if (!trips.length) return {};
     const result: Record<string, RawTrain> = {}; const stopQuery = this.db().prepare(`SELECT st.trip_id, s.canonical_name AS station, st.arrival_sec, st.departure_sec, st.callable FROM stop_time st JOIN station s ON s.station_id=st.station_id WHERE st.trip_id=? ORDER BY st.stop_sequence`);
-    for (const trip of trips) { const stops = stopQuery.all(trip.trip_id) as StopRow[]; result[trip.train_no] = { direction: trip.direction, service: trip.service_kind, start: trip.origin, dest: trip.destination, stops: stops.map((stop) => ({ station: stop.station, arr: stop.arrival_sec, dep: stop.departure_sec, call: stop.callable !== 0 })) }; }
+    trips.forEach((trip, index) => {
+      const stops = stopQuery.all(trip.trip_id) as StopRow[];
+      const key = line === "신분당선" ? shinbundangInternalId(day, index) : trip.train_no;
+      result[key] = { direction: trip.direction, service: trip.service_kind, start: trip.origin, dest: trip.destination, linked_train_no: line === "신분당선" ? trip.train_no : undefined, stops: stops.map((stop) => ({ station: stop.station, arr: stop.arrival_sec, dep: stop.departure_sec, call: stop.callable !== 0 })) };
+    });
     return result;
   }
   private officialData(): EngineData["official"] {
