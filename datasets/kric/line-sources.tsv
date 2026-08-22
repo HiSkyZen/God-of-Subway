@@ -1,0 +1,35 @@
+source_id	logical_line	operator_code	operator_name	line_code	source_line_name	section	realtime	timetable	priority
+S1:1:all	1호선	S1	서울교통공사	1	1호선		1	1	10
+S1:2:all	2호선	S1	서울교통공사	2	2호선		1	1	10
+S1:3:all	3호선	S1	서울교통공사	3	3호선		1	1	10
+S1:4:all	4호선	S1	서울교통공사	4	4호선		1	1	10
+S1:5:all	5호선	S1	서울교통공사	5	5호선		1	1	10
+S1:6:all	6호선	S1	서울교통공사	6	6호선		1	1	10
+S1:7:all	7호선	S1	서울교통공사	7	7호선		1	1	10
+S1:8:all	8호선	S1	서울교통공사	8	8호선		1	1	10
+KR:1:all	1호선	KR	한국철도공사	1	1호선		1	1	10
+KR:3:all	3호선	KR	한국철도공사	3	3호선		1	1	10
+KR:4:all	4호선	KR	한국철도공사	4	4호선		1	1	10
+NU:4:all	4호선	NU	남양주도시공사	4	4호선		1	1	10
+IC:7:all	7호선	IC	인천교통공사	7	7호선		1	1	10
+GU:8:all	8호선	GU	구리도시공사	8	8호선		1	1	10
+NU:8:all	8호선	NU	남양주도시공사	8	8호선		1	1	10
+S9:9:all	9호선	S9	서울시메트로9호선주식회사	9	9호선		1	1	10
+KR:K4:all	경의중앙선	KR	한국철도공사	K4	경의중앙		1	1	10
+KR:K1:all	수인분당선	KR	한국철도공사	K1	수인분당		1	1	10
+KR:K2:all	경춘선	KR	한국철도공사	K2	경춘		1	1	10
+KR:K5:all	경강선	KR	한국철도공사	K5	경강		1	1	10
+KR:WS:all	서해선	KR	한국철도공사	WS	서해선		1	1	10
+SW:WS:all	서해선	SW	서해철도주식회사	WS	서해선		1	1	10
+AR:A1:all	공항철도	AR	공항철도주식회사	A1	공항		1	1	10
+DX:D1:all	신분당선	DX	네오트랜스주식회사	D1	신분당		1	1	10
+IC:I1:all	인천1호선	IC	인천교통공사	I1	인천1호선		0	1	10
+IC:I2:all	인천2호선	IC	인천교통공사	I2	인천2호선		0	1	10
+EV:E1:all	용인에버라인	EV	용인경량전철주식회사	E1	에버라인		0	1	10
+GM:G1:all	김포골드라인	GM	김포골드라인에스알에스(주)	G1	김포골드라인		0	1	10
+UL:U1:all	의정부경전철	UL	의정부경량전철주식회사	U1	의정부		0	1	10
+UI:UI:all	우이신설선	UI	우이신설경전철주식회사	UI	우이신설		0	1	10
+SL:L1:all	신림선	SL	남서울경전철주식회사	L1	신림선		0	1	10
+GX:A:north	GTX-A(북부)	GX	지티엑스에이운영	A	GTX-A	north	1	1	10
+GX:A:south	GTX-A(남부)	GX	지티엑스에이운영	A	GTX-A	south	1	1	10
+SR:A:south	GTX-A(남부)	SR	주식회사 SR	A	GTX-A	south	1	1	10
