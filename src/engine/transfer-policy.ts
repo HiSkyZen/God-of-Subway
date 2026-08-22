@@ -25,14 +25,12 @@ const pair = (station: string, a: string, b: string, value: TransferPolicyOverri
 ];
 
 /**
- * Physical-layout corrections have priority over imported transfer_data.json.
- * In particular, upstream V13.5.4 marks 대곡 경의중앙선↔서해선 as 0 seconds even
+ * Physical-layout corrections have priority over normalized SQLite transfer data.
+ * In particular, upstream V13.5.4 marked 대곡 경의중앙선↔서해선 as 0 seconds even
  * though the lines use separate platforms connected by a transfer passage.
  *
- * GTX-A entries below are also topology edges: imported upstream transfer data
- * predates the integrated GTX route graph, so these explicit pairs are required
- * to connect GTX platforms to the ordinary network without reviving unsafe
- * same-name auto-transfer behavior.
+ * GTX-A entries below are also topology edges required to connect GTX platforms
+ * to the ordinary network without reviving unsafe same-name auto-transfer behavior.
  */
 const OVERRIDES = new Map<string, TransferPolicyOverride>([
   ...pair("대곡", "경의중앙선", "서해선", { seconds: 180, mode: "passage", source: "web-verified", note: "별도 승강장·환승통로; 0초 제자리환승 금지" }),
@@ -81,14 +79,13 @@ export interface PhysicalTransferEntry {
   policy: TransferPolicyOverride;
 }
 
-/** Auditable physical-transfer edges that may not exist in imported operator pair data. */
+/** Auditable physical-transfer edges that may not exist in operator pair data. */
 export function physicalTransferEntries(): PhysicalTransferEntry[] {
   return [...OVERRIDES.entries()].map(([raw, policy]) => {
     const [station, fromLine, toLine] = raw.split("|");
     return { station, fromLine, toLine, policy };
   });
 }
-
 
 function stableTransferHash(text: string): number {
   let hash = 2166136261;
@@ -106,18 +103,12 @@ export function modeledMissingTransferSeconds(
   toLine = "",
   lineCount = 2,
 ): number {
-  let seconds: number;
-  if (typeof distanceM === "number" && Number.isFinite(distanceM) && distanceM > 0) {
-    seconds = Math.max(30, Math.round(distanceM / 1.1 + 25));
-  } else {
-    const compactLines = `${fromLine}|${toLine}`;
-    const lightRail = /경전철|골드|에버|인천|우이신설|신림/u.test(compactLines);
-    const base = lightRail ? 172 : 158;
-    const variation = (stableTransferHash(`${canonStation(station)}|${[fromLine, toLine].sort().join("|")}`) % 46) - 14;
-    seconds = Math.round(base + Math.max(0, lineCount - 2) * 24 + variation);
-  }
-  const bounded = Math.max(75, Math.min(420, seconds));
-  return bounded === 240 ? 247 : bounded;
+  if (typeof distanceM === "number" && Number.isFinite(distanceM) && distanceM > 0) return Math.round(distanceM / 1.2);
+  const compactLines = `${fromLine}|${toLine}`;
+  const lightRail = /경전철|골드|에버|인천|우이신설|신림/u.test(compactLines);
+  const base = lightRail ? 172 : 158;
+  const variation = (stableTransferHash(`${canonStation(station)}|${[fromLine, toLine].sort().join("|")}`) % 46) - 14;
+  return Math.max(75, Math.min(420, Math.round(base + Math.max(0, lineCount - 2) * 24 + variation)));
 }
 
 function minutes(date: Date): number { return date.getUTCHours() * 60 + date.getUTCMinutes(); }
