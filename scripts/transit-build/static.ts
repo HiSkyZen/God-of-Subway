@@ -45,6 +45,25 @@ function transferStationId(
   toLine: string,
 ): number {
   const canonical = cleanName(stationName);
+  if (fromLine === toLine) {
+    const sameLine = db.query(`
+      SELECT s.station_id
+      FROM station s
+      JOIN station_source ss ON ss.station_id=s.station_id
+      JOIN source_registry sr ON sr.source_id=ss.source_id
+      WHERE s.canonical_name=? AND sr.logical_line=?
+      GROUP BY s.station_id
+      ORDER BY s.station_id
+      LIMIT 1
+    `).get(canonical, fromLine) as { station_id: number } | null;
+    if (!sameLine) {
+      throw new Error(
+        `서울교통공사 동일노선 환승역을 찾지 못했습니다: ${canonical} ${fromLine}`,
+      );
+    }
+    return Number(sameLine.station_id);
+  }
+
   const row = db.query(`
     SELECT s.station_id
     FROM station s
