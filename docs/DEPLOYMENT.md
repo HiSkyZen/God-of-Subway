@@ -1,6 +1,6 @@
 # Vercel Deploy
 
-이 저장소의 Vercel 배포 산출물은 Bun Function, React PWA 정적 파일, 그리고 빌드 시 생성되는 `data/transit.sqlite`입니다. 런타임은 레거시 `data/*.json`을 사용하지 않습니다.
+이 저장소의 Vercel 배포 산출물은 Bun Function, React PWA 정적 파일, 그리고 빌드 시 생성되는 `data/transit.sqlite`입니다.
 
 ## 빌드 경로
 
@@ -11,50 +11,66 @@ bun run verify:pwa
 bun run verify:aot
 ```
 
-`build:all`은 먼저 `bun run build:data`로 SQLite를 만든 뒤 서버를 `dist/server`, 브라우저/PWA 파일을 `dist/public`으로 구성합니다. `scripts/promote-static.ts`가 Bun HTML 번들러의 해시 CSS/JS를 공개 디렉터리로 정리하고 manifest/icon URL을 안정화합니다.
+`build:all`은 `build:data` → 서버 build → PWA build → 정적 파일 promotion 순서입니다. Function bundle은 `vercel.json`의 `includeFiles: "data/*.sqlite"`로 SQLite를 내부 파일로 포함합니다. Vercel의 immutable deployment filesystem 때문에 runtime에서는 이 파일을 `/tmp`로 한 번 복사한 뒤 `bun:sqlite` read-only 모드로 엽니다.
 
-Vercel Function은 `vercel.json`의 `includeFiles: "data/*.sqlite"`로 SQLite를 내부 런타임 파일로 포함합니다. Vercel Function의 배포 파일시스템은 immutable이므로 cold start에서 포함된 DB를 writable `/tmp`로 한 번 복사하고, 그 복사본을 `bun:sqlite` read-only 모드로 엽니다. 원본 번들 DB는 수정하지 않습니다.
+## live KRIC 시간표 빌드 최적화
 
-`/data/*`는 `dist/public`에 포함되지 않으며 API router에서도 내부 데이터 경로를 노출하지 않습니다.
+KRIC 시간표 API는 역 코드가 포함된 station-level API이므로 live DB 생성 비용의 대부분이 시간표 요청입니다. 빌더는 모든 역에서 endpoint fallback 체인을 반복하지 않습니다.
+
+1. 운영기관/노선/요일(source/day)마다 최대 2개 대표 역으로 endpoint를 probe합니다.
+2. `subwayTimetableExp` → `subwayTimetable` → `stationTimetable` 중 실제 data를 반환하는 endpoint 하나를 선택합니다.
+3. 선택한 endpoint를 해당 source/day의 나머지 역에 병렬 fan-out합니다.
+4. 개별 역이 선택 endpoint에서 비는 경우에만 다른 endpoint를 fallback합니다.
+5. 기본 timetable concurrency는 16이며 `TRANSIT_BUILD_CONCURRENCY`를 명시하면 그 값을 사용합니다.
+
+KRIC 공식 `dayCd`는 `8=평일`, `7=토요일`, `9=휴일`입니다. 모든 대표 source에서 `dayCd=7`이 빈 결과이면 기존처럼 수백 개 역을 3-endpoint로 재시도하지 않습니다. SAT fan-out을 즉시 중단하고 해당 논리 노선에 대해 END를 명시적 fail-safe로 복제합니다. 사용된 노선은 SQLite `metadata.sat_schedule_fallback`과 build log에 기록합니다.
+
+## 환승거리는 deploy-time에 수집하지 않음
+
+KRIC `stationTransferInfo`는 Vercel build 중 전수 호출하지 않습니다. Build-time에는:
+
+- 서울교통공사 authoritative transfer row를 적재하고,
+- 각 물리 `station_id`의 `n`개 논리 노선으로 `n*(n-1)/2` unordered pair 토폴로지를 만들고,
+- 서울교통공사에 없는 directed row를 `runtime-kric-pending` placeholder로 저장합니다.
+
+따라서 `metadata.runtime_kric_transfer_build_requests=0`이어야 정상입니다.
+
+실제 경로가 pending pair를 사용할 때 Function이 KRIC `stationTransferInfo`를 조회하고 `round(chtnDst / 1.2)`를 계산합니다. 결과는 pair 단위로 캐시됩니다.
 
 ## 데이터 빌드 모드
 
 ### Production
 
-기본값은 `live`입니다. `KRIC_API_KEY`가 반드시 필요하며 KRIC 필수 시간표가 비거나 API 호출이 실패하면 배포를 실패시킵니다. Production에서는 키가 없다는 이유로 fixture로 자동 강등하지 않습니다.
+기본값은 `live`입니다. `KRIC_API_KEY`가 필요합니다. 키가 없다고 fixture로 자동 강등하지 않습니다.
 
 ### Preview
 
-Vercel은 빌드 시 `VERCEL_ENV=preview`를 제공합니다. `TRANSIT_DATA_MODE`가 명시되지 않았고 Preview에 `KRIC_API_KEY`가 없는 경우에만 deterministic fixture SQLite를 사용합니다. 이 정책은 PR UI/Function/AOT 검증을 secret 배포 여부와 분리하기 위한 것입니다.
-
-Preview에도 `KRIC_API_KEY`를 설정하면 기본 live 빌드를 수행할 수 있습니다. `TRANSIT_DATA_MODE=live`를 명시한 Preview는 키가 없으면 의도적으로 실패합니다.
+`TRANSIT_DATA_MODE`가 없고 Preview에 `KRIC_API_KEY`도 없을 때만 fixture SQLite를 사용합니다. Preview에 KRIC 키가 있으면 live 시간표 빌드를 수행하되, 환승거리 전수 조회는 하지 않습니다.
 
 ### CI/local
 
 - GitHub Actions: `TRANSIT_DATA_MODE=fixture`
 - 로컬 fixture: `TRANSIT_DATA_MODE=fixture bun run build:data`
-- 로컬 live: `KRIC_API_KEY`를 로컬 secret 환경에만 설정하고 `bun run build:data`
+- 로컬 live: secret 환경에 `KRIC_API_KEY`를 설정하고 `bun run build:data`
 
-## 필수/선택 환경변수
+## 관련 환경변수
 
-- `KRIC_API_KEY`: Production live SQLite 생성에 필수. Preview live 빌드에도 필요합니다.
-- `SEOUL_API_KEY`: 서울 열린데이터광장 실시간 지하철 위치 API 키. 미설정 시 실시간 위치 기능이 degraded 상태가 됩니다.
-- `TRANSIT_DATA_MODE`: `live` 또는 `fixture`. Production에서는 특별한 조사 목적이 아니면 `live`를 유지합니다.
-- `TRANSIT_BUILD_CONCURRENCY`: KRIC station/day 호출 동시성.
-- `TRANSIT_BUILD_HTTP_TIMEOUT_MS`: KRIC HTTP 요청 timeout.
-- `TRANSIT_BUILD_ALLOW_PARTIAL`: 조사용 partial build 전용. 정상 Production에는 설정하지 않습니다.
-- `SEOUL_REALTIME_BASE_URL`, `KRIC_API_BASE_URL`: 기본 API endpoint를 교체할 때만 사용합니다.
-- 캐시/푸시 관련 환경변수는 실제 배포 환경의 연결 방식을 따르며, 푸시 키는 `bun run generate:vapid` / `bun run verify:vapid`로 검증합니다.
+- `KRIC_API_KEY`: live 시간표 빌드 및 runtime pending transfer 조회
+- `SEOUL_API_KEY`: 서울 실시간 열차 위치
+- `TRANSIT_DATA_MODE`: `live` / `fixture`
+- `TRANSIT_BUILD_CONCURRENCY`: live timetable station fan-out 동시성
+- `TRANSIT_BUILD_HTTP_TIMEOUT_MS`: build-time KRIC HTTP timeout
+- `KRIC_RUNTIME_TIMEOUT_MS`: runtime transfer KRIC timeout, 기본 3500ms
+- `KRIC_RUNTIME_TRANSFER_CONCURRENCY`: 한 요청에서 필요한 transfer pair 동시 조회 수, 기본 4
+- `TRANSIT_BUILD_ALLOW_PARTIAL`: 조사 전용
 
-실제 API 키 값은 저장소, 빌드 로그, SQLite `metadata/build_source`, PR 본문에 기록하지 않습니다.
+API key 값은 로그, SQLite metadata/build_source, 저장소, PR 본문에 기록하지 않습니다.
 
 ## 배포 후 확인
 
-1. Vercel deployment state가 `READY`인지 확인합니다.
-2. `/api/health`가 `ok: true`인지 확인합니다.
-3. 내부 SQLite가 정적 파일로 제공되지 않는지 확인합니다.
-4. 역 검색에서 신촌/양평이 노선별 후보로 분리되는지 확인합니다.
-5. 대곡 경의중앙선↔서해선이 `제자리 환승`으로 표시되지 않는지 확인합니다.
-6. PWA manifest/service worker가 정상 로드되는지 확인합니다.
-
-Vercel 계정/프로젝트 ID와 secret 값은 저장소에 하드코딩하지 않습니다.
+1. deployment가 `READY`인지 확인합니다.
+2. build log의 `KRIC timetable` 통계에서 request 수와 SAT fallback 여부를 확인합니다.
+3. `KRIC transfer build requests=0`인지 확인합니다.
+4. `/api/health`가 `ok: true`인지 확인합니다.
+5. `transfer_policy.kric_runtime`의 endpoint/cache 상태를 확인합니다.
+6. 내부 SQLite가 정적 자산으로 노출되지 않는지 확인합니다.

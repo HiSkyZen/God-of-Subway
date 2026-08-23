@@ -2,53 +2,67 @@
 
 ## 데이터 우선순위
 
-환승 데이터는 빌드 시 SQLite `transfer_pair`/`transfer_detail`로 정규화합니다. 런타임은 레거시 JSON을 읽지 않습니다.
+런타임은 레거시 환승 JSON을 읽지 않습니다. SQLite에는 환승 **토폴로지와 서울교통공사 원천**을 저장하고, 서울교통공사에 없는 KRIC 거리는 실제 경로 계산 시 필요한 pair만 조회합니다.
 
-1. 런타임 물리 승강장 오버라이드 (`src/engine/transfer-policy.ts`)
-2. `datasets/transfers/seoul-metro-transfer-times.tsv`의 서울교통공사 2025-12-31 방향별 거리/시간 원천
-3. KRIC `convenientInfo/stationTransferInfo` 거리 fallback — 위 원천에 없는 노선쌍만 `INSERT OR IGNORE`
-4. 명시된 물리 공용선로 정책 또는 런타임 추정 정책
+1. 물리 승강장 오버라이드 (`src/engine/transfer-policy.ts`)
+2. `datasets/transfers/seoul-metro-transfer-times.tsv`의 서울교통공사 2025-12-31 방향별 거리/시간
+3. KRIC `convenientInfo/stationTransferInfo` 런타임 거리 조회
+4. KRIC 조회가 불가능할 때의 명시적 추정/placeholder 정책
 
-서울교통공사 값은 KRIC fallback보다 우선합니다. KRIC가 `chtnDst`를 제공한 경우 환승시간은 정확히 `round(distance_m / 1.2)`로 계산하며, 과거 `distance / 1.1m/s + 25초` 또는 고정 `240→247초` 보정은 사용하지 않습니다.
+서울교통공사 값은 KRIC가 덮어쓰지 않습니다. KRIC `chtnDst`를 사용한 경우 환승시간은 정확히 다음과 같습니다.
 
-거리나 공식 pair가 없을 때의 런타임 추정은 provenance가 `model/estimated`로 구분되며 측정값으로 취급하지 않습니다.
+```text
+seconds = round(chtnDst_m / 1.2)
+```
 
-## 동명이의역
+과거 `distance / 1.1m/s + 25초`, `240→247초` 같은 별도 보정은 사용하지 않습니다.
 
-신촌(2호선/경의중앙선), 양평(5호선/경의중앙선)처럼 이름은 같지만 물리적으로 다른 역을 하나의 노드로 합치지 않습니다. SQLite 환승 pair 또는 검증된 물리 공용선로 정책이 있을 때만 노선 간 환승 엣지를 생성합니다. 같은 역명에 서로 연결되지 않은 노선 그룹이 있으면 검색 후보에서 노선을 선택해야 합니다.
+## 한 역의 환승 pair 수: nC2
+
+환승거리는 “역당 하나”가 아니라 **물리 역의 노선쌍마다 하나**입니다. 한 물리 역에 서로 환승 가능한 논리 노선이 `n`개이면 서로 다른 unordered pair 수는 다음과 같습니다.
+
+```text
+pair_count = n * (n - 1) / 2
+```
+
+예를 들어 2개 노선은 1개, 3개 노선은 3개, 4개 노선은 6개의 물리 환승 pair를 가집니다.
+
+빌드 시 `station_id`별 논리 노선을 그룹화해 정확히 nC2 토폴로지를 생성합니다. SQLite `transfer_pair`는 경로 탐색을 위해 방향별 row를 가지므로 하나의 unordered pair가 최대 두 directed row로 표현됩니다. 서울교통공사 row가 이미 존재하면 유지하고 누락 방향만 `runtime-kric-pending` placeholder로 채웁니다.
+
+신촌(2호선/경의중앙선), 양평(5호선/경의중앙선)처럼 이름만 같은 별도 물리 역은 서로 다른 `station_id`이므로 nC2 계산에 섞지 않습니다.
+
+## KRIC 런타임 조회
+
+배포 시 `stationTransferInfo`를 전수 호출하지 않습니다. 경로 후보에 실제로 등장한 `역 + 노선 A + 노선 B` pair가 `runtime-kric-pending`일 때만 다음 순서로 처리합니다.
+
+1. SQLite의 해당 `station_id`에서 운영기관/노선/역 코드를 찾습니다.
+2. KRIC `stationTransferInfo`를 호출합니다.
+3. 응답의 `chtnLn`을 대상 노선에 매칭하고 해당 pair의 `chtnDst`만 사용합니다.
+4. 같은 pair에 여러 거리 row가 있으면 중앙값을 사용합니다.
+5. `round(chtnDst / 1.2)`를 계산해 현재 Function 인스턴스의 transfer pair를 갱신합니다.
+6. Valkey/메모리 캐시에 저장해 같은 pair의 반복 API 호출을 피합니다.
+
+한 역에 여러 환승 노선이 있어도 하나의 역 대표 거리로 합치지 않습니다. 캐시 키 역시 `station_id + 정렬된 두 노선`의 unordered pair 단위입니다.
+
+KRIC 장애나 미설정 시에는 cached stale 값이 있으면 사용하고, 없으면 DB의 보수적 placeholder/모델값으로 경로 계산을 계속합니다.
 
 ## 공용선로와 제자리 환승
 
-2026-08 기준 현재 서비스 중인 직접 공용선로 중 이 프로젝트가 다루는 핵심 구간은 다음과 같습니다.
+현재 서비스에서 별도 물리 정책을 적용하는 핵심 공용선로는 다음과 같습니다.
 
 - 경의중앙선 ↔ 경춘선: 청량리–상봉
 - 경의중앙선 ↔ 수인분당선: 청량리–왕십리
 - 4호선 ↔ 수인분당선: 한대앞–오이도
 - 경의중앙선 ↔ 서해선: 대곡–일산
 
-공용선로에서는 **동일 방향 승강장 면**을 이용하는 경우에만 0초 제자리 환승으로 처리합니다. 반대 방향 또는 다른 승강장 면이면 물리 정책에서 지정한 플랫폼 이동시간을 적용합니다. 오이도처럼 별도 검증값이 있는 역은 일반 거리 fallback보다 해당 물리 정책을 우선합니다.
+동일 방향 동일 승강장 면처럼 검증된 경우에만 0초 제자리 환승을 허용합니다. 대곡·능곡 등 승강장이 분리된 역은 공용선로라는 이유만으로 0초가 되지 않습니다. 이러한 물리 override는 일반 KRIC 거리보다 우선합니다.
 
-### 대곡 예외
+## 검증
 
-경의중앙선과 서해선이 대곡–일산 구간에서 선로를 공유하더라도 대곡역 자체에서는 두 노선의 승강장이 분리되어 환승통로 이동이 필요합니다. 따라서 제자리 환승으로 처리하지 않으며 `transfer-policy.ts`의 검증된 물리 오버라이드가 SQLite pair보다 우선합니다.
+`build:data`, `doctor`, `audit:transfers`는 다음을 검사합니다.
 
-### 능곡 예외
-
-노선도상 경의중앙선/서해선 연속 환승 구간에 포함되지만 능곡역은 경의중앙선과 서해선이 서로 다른 승강장/선로를 사용합니다. 제자리 환승 오버라이드 대상이 아닙니다.
-
-## 빌드 검증
-
-`build:data`, `doctor`, `audit-transfers`는 다음을 검사합니다.
-
-- 서울교통공사 원천 row가 KRIC fallback에 의해 덮어쓰이지 않았는지
-- 음수/누락 환승시간이 없는지
-- KRIC 거리 source의 `seconds == round(distance_m / 1.2)` 여부
-- 동명이의역 금지 pair가 자동 생성되지 않는지
-
-## 혼잡 가중치
-
-평일 KST 기준 혼잡 시간대에는 시간대 강도와 역별 수요 가중치를 결합합니다. 최고 혼잡 구간은 `1 + predictedLoad × 0.75`, 최대 1.75배입니다. 주말/평시에는 1.0입니다. 0초 제자리 환승은 혼잡하더라도 이동시간을 인위적으로 늘리지 않습니다.
-
-## 출처 원칙
-
-정규화된 공공데이터와 각 row의 `source` provenance를 우선합니다. 외부 웹 자료는 공용선로·승강장 구조 같은 물리 예외를 교차검증할 때만 보조 자료로 사용하며, 공식 공공데이터를 무조건 덮어쓰지 않습니다.
+- 서울교통공사 row가 보존되는지
+- deploy-time KRIC 환승거리 row가 0건인지
+- 물리 역별 unordered pair 수가 정확히 nC2인지
+- `runtime-kric-pending`이 유효한 directed routing row인지
+- 공항철도 직통 또는 동명이의역 금지 연결이 환승 토폴로지에 섞이지 않는지

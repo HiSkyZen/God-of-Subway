@@ -1,67 +1,79 @@
 import { Database } from "bun:sqlite";
-import { ALLOW_PARTIAL, BUILD_CONCURRENCY, DISJOINT, KRIC_BASE, SUPPORTED_LINES, TRANSFER_SPEED_MPS, buildSource, cleanName, collectApiRows, kricJson, mapConcurrent, normalizeLine, rowValue, stationId, type ApiRow, type SourceRow, type StationRow } from "./common";
+import { DISJOINT, KRIC_BASE, buildSource, cleanName } from "./common";
+import { unorderedLinePairs, unorderedTransferPairCount } from "../../src/infra/transfer-pairs";
 
-export function seedFixtureMissingTransfers(db: Database): number {
-  const rows = db.query(`SELECT s.station_id,s.canonical_name,GROUP_CONCAT(DISTINCT sr.logical_line) AS lines FROM station s JOIN station_source ss ON ss.station_id=s.station_id JOIN source_registry sr ON sr.source_id=ss.source_id GROUP BY s.station_id HAVING COUNT(DISTINCT sr.logical_line)>1`).all() as Array<{ station_id:number; canonical_name:string; lines:string }>;
-  let inserted = 0; const insert = db.prepare(`INSERT OR IGNORE INTO transfer_pair(station_id,from_line,to_line,distance_m,seconds,source) VALUES (?,?,?,?,?,?)`);
+/**
+ * Seed routing topology for every physical transfer pair without calling KRIC.
+ *
+ * A station with n logical lines has nC2 distinct physical line-pairs. SQLite
+ * stores directed routing edges, so each unordered pair can produce two rows.
+ * Existing Seoul Metro rows are authoritative and INSERT OR IGNORE preserves
+ * them. The 180-second value is only a routing placeholder: runtime KRIC
+ * enrichment replaces pending pairs with round(chtnDst / 1.2) before final ETA
+ * scoring.
+ */
+export function seedRuntimeTransferPlaceholders(db: Database): {
+  physicalPairs: number;
+  directedRows: number;
+} {
+  const stations = db.query(`
+    SELECT s.station_id, s.canonical_name,
+           GROUP_CONCAT(DISTINCT sr.logical_line) AS lines
+    FROM station s
+    JOIN station_source ss ON ss.station_id=s.station_id
+    JOIN source_registry sr ON sr.source_id=ss.source_id
+    GROUP BY s.station_id
+    HAVING COUNT(DISTINCT sr.logical_line) > 1
+    ORDER BY s.station_id
+  `).all() as Array<{ station_id: number; canonical_name: string; lines: string }>;
+
+  const insert = db.prepare(`
+    INSERT OR IGNORE INTO transfer_pair(
+      station_id,from_line,to_line,distance_m,seconds,source
+    ) VALUES (?,?,?,NULL,180,'runtime-kric-pending')
+  `);
+  let physicalPairs = 0;
+  let directedRows = 0;
+
   db.transaction(() => {
-    for (const row of rows) for (const fromLine of row.lines.split(",")) for (const toLine of row.lines.split(",")) {
-      if (fromLine === toLine || DISJOINT.has(`${row.canonical_name}|${fromLine}|${toLine}`)) continue;
-      const result = insert.run(row.station_id, fromLine, toLine, 120, Math.round(120 / TRANSFER_SPEED_MPS), "fixture-kric-distance-1.2mps"); inserted += Number(result.changes || 0);
-    }
-  })();
-  return inserted;
-}
+    for (const row of stations) {
+      const station = cleanName(row.canonical_name);
+      const lines = [...new Set(row.lines.split(",").map((line) => line.trim()).filter(Boolean))].sort();
+      const expected = unorderedTransferPairCount(lines.length);
+      let stationPairs = 0;
 
-type Candidate = { station: StationRow; source: SourceRow; canonical: string };
-type KricTransferResult = { candidate: Candidate; rows: ApiRow[] };
+      for (const [a, b] of unorderedLinePairs(lines)) {
+        if (DISJOINT.has(`${station}|${a}|${b}`) || DISJOINT.has(`${station}|${b}|${a}`)) {
+          continue;
+        }
+        stationPairs += 1;
+        physicalPairs += 1;
+        directedRows += Number(insert.run(row.station_id, a, b).changes || 0);
+        directedRows += Number(insert.run(row.station_id, b, a).changes || 0);
+      }
 
-function missingTransferCandidates(db: Database, sources: SourceRow[], stations: StationRow[]): Candidate[] {
-  const sourceMap = new Map(sources.map((source) => [source.source_id, source]));
-  const multi = db.query(`SELECT s.canonical_name,GROUP_CONCAT(DISTINCT sr.logical_line) AS lines FROM station s JOIN station_source ss ON ss.station_id=s.station_id JOIN source_registry sr ON sr.source_id=ss.source_id GROUP BY s.station_id HAVING COUNT(DISTINCT sr.logical_line)>1`).all() as Array<{ canonical_name:string; lines:string }>;
-  const wanted = new Map(multi.map((row) => [cleanName(row.canonical_name), row.lines.split(",")]));
-  const seen = new Set<string>(); const result: Candidate[] = [];
-  for (const station of stations) {
-    const canonical = cleanName(station.canonical_name || station.source_station_name); const lines = wanted.get(canonical); const source = sourceMap.get(station.source_id); if (!lines || !source) continue;
-    const hasMissing = lines.some((toLine) => {
-      if (toLine === source.logical_line || DISJOINT.has(`${canonical}|${source.logical_line}|${toLine}`)) return false;
-      const row = db.query(`SELECT 1 AS ok FROM transfer_pair p JOIN station s ON s.station_id=p.station_id WHERE s.canonical_name=? AND p.from_line=? AND p.to_line=? LIMIT 1`).get(canonical, source.logical_line, toLine);
-      return !row;
-    });
-    if (!hasMissing) continue;
-    const key = `${station.source_id}|${station.station_code}`; if (seen.has(key)) continue; seen.add(key); result.push({ station, source, canonical });
-  }
-  return result;
-}
-
-async function fetchTransfer(candidate: Candidate): Promise<KricTransferResult> {
-  try {
-    const payload = await kricJson("convenientInfo/stationTransferInfo", { railOprIsttCd: candidate.source.operator_code, lnCd: candidate.source.line_code, stinCd: candidate.station.station_code }, 1);
-    return { candidate, rows: collectApiRows(payload, (row) => rowValue(row, "chtnDst") !== undefined && rowValue(row, "chtnLn") !== undefined) };
-  } catch (error) {
-    const message = `${candidate.source.source_id}/${candidate.station.station_code}: ${error instanceof Error ? error.message : String(error)}`;
-    if (!ALLOW_PARTIAL) throw new Error(`KRIC 환승거리 요청 실패: ${message}`);
-    console.warn(`[build:data] partial transfer: ${message}`); return { candidate, rows: [] };
-  }
-}
-
-export async function loadKricTransferFallback(db: Database, sources: SourceRow[], stations: StationRow[]): Promise<number> {
-  const candidates = missingTransferCandidates(db, sources, stations); let inserted = 0; let apiRows = 0;
-  const insert = db.prepare(`INSERT OR IGNORE INTO transfer_pair(station_id,from_line,to_line,distance_m,seconds,source) VALUES (?,?,?,?,?,?)`);
-  const results = await mapConcurrent(candidates, Math.min(BUILD_CONCURRENCY, 6), fetchTransfer);
-  db.transaction(() => {
-    for (const { candidate, rows } of results) {
-      apiRows += rows.length; const sid = stationId(db, candidate.canonical);
-      for (const row of rows) {
-        const distance = Number(String(rowValue(row, "chtnDst") ?? "").replace(/[^0-9.]/g, "")); if (!Number.isFinite(distance) || distance <= 0) continue;
-        const toLine = normalizeLine(rowValue(row, "chtnLn"), candidate.canonical); const fromLine = candidate.source.logical_line;
-        if (!SUPPORTED_LINES.includes(toLine as never) || toLine === fromLine || DISJOINT.has(`${candidate.canonical}|${fromLine}|${toLine}`)) continue;
-        const seconds = Math.round(distance / TRANSFER_SPEED_MPS);
-        const forward = insert.run(sid, fromLine, toLine, distance, seconds, "kric-distance-1.2mps"); inserted += Number(forward.changes || 0);
-        if (!DISJOINT.has(`${candidate.canonical}|${toLine}|${fromLine}`)) { const reverse = insert.run(sid, toLine, fromLine, distance, seconds, "kric-distance-1.2mps"); inserted += Number(reverse.changes || 0); }
+      const disjointAtStation = lines.some((a) =>
+        lines.some((b) => a !== b && DISJOINT.has(`${station}|${a}|${b}`))
+      );
+      if (!disjointAtStation && stationPairs !== expected) {
+        throw new Error(
+          `환승쌍 nC2 불변조건 실패: ${station} lines=${lines.length} pairs=${stationPairs}/${expected}`,
+        );
       }
     }
   })();
-  buildSource(db, "kric-transfer-distance", `${KRIC_BASE}/convenientInfo/stationTransferInfo`, apiRows, `${candidates.length} missing-transfer station/source requests; INSERT OR IGNORE preserves Seoul Metro; seconds=round(distance_m/${TRANSFER_SPEED_MPS}); credentials omitted`);
-  return inserted;
+
+  buildSource(
+    db,
+    "runtime-kric-transfer-placeholders",
+    `${KRIC_BASE}/convenientInfo/stationTransferInfo`,
+    physicalPairs,
+    `build-time API requests=0; physical pair topology=nC2; directed placeholder rows inserted=${directedRows}; Seoul Metro rows preserved`,
+  );
+  return { physicalPairs, directedRows };
+}
+
+/** Backward-compatible fixture alias used by older tests/scripts. */
+export function seedFixtureMissingTransfers(db: Database): number {
+  return seedRuntimeTransferPlaceholders(db).directedRows;
 }

@@ -2,58 +2,65 @@
 
 ## 목표
 
-정적 시간표·노선 그래프·환승 JSON을 런타임 의존성에서 제거하고, 매 빌드마다 검증 가능한 원천 데이터와 KRIC OpenAPI로 단일 SQLite 데이터베이스를 생성한다. 서울 열린데이터광장 실시간 위치 API는 정적 DB와 분리한다.
+정적 시간표·노선 그래프·환승 JSON을 런타임 의존성에서 제거하고, 검토 가능한 TSV와 KRIC OpenAPI를 바탕으로 `data/transit.sqlite`를 생성합니다. 서울 열린데이터광장 실시간 위치 API와 KRIC 환승거리 런타임 조회는 정적 DB와 분리합니다.
 
-## 빌드 경로
+## 시간표 빌드
 
-`datasets/*.tsv` → 역사/노선 식별자 및 검토 가능한 환승 자료
-
-KRIC OpenAPI → `trainUseInfo/subwayTimetableExp`(DAY=8, SAT=7, END=9), `convenientInfo/stationTimetable` fallback, `convenientInfo/stationTransferInfo`
-
-`bun run build:data` → `data/transit.sqlite`
-
-Vercel Function → 읽기 전용 `bun:sqlite`
-
-CI는 외부 API/시크릿 없이 동일 스키마를 검증하기 위해 `TRANSIT_DATA_MODE=fixture`를 사용한다. 프로덕션은 기본 `live` 모드이며 `KRIC_API_KEY`가 없거나 필수 노선 시간표가 비어 있으면 빌드를 실패시킨다. `TRANSIT_BUILD_ALLOW_PARTIAL=1`은 조사 목적에만 사용한다.
-
-KRIC 호출은 제한된 동시성, 요청 timeout, 재시도를 사용한다. 인증키는 요청 URL을 포함해 로그·메타데이터에 기록하지 않는다.
-
-## 정규형
-
-- `source_registry`: 운영기관/노선 코드와 논리 노선의 관계
-- `station`, `station_source`: 물리 역사와 각 소스의 역사 코드
-- `trip`, `trip_source`, `stop_time`: 운행일·열차·정차시각
-- `ride_edge`: 실제 시간표에서 집계한 인접 정차역 운행시간
-- `transfer_pair`, `transfer_detail`: 환승시간/거리와 방향별 빠른 환승 위치
-- `holiday`: 서비스 운행일 판정
-- `metadata`, `build_source`: 재현성/출처/빌드 상태
-
-`DAY`, `SAT`, `END`는 별도 저장한다. 자정 이후 02:00 이전 운행은 전일 서비스의 24시간 초과 시각으로 정규화한다.
-
-## 일반/급행과 공항철도 직통
-
-KRIC `subwayTimetableExp`의 `exptCd`를 우선해 일반/급행 여부를 정규화하고, 경로 선택의 제1 기준은 실제 예상 도착시각으로 유지한다. 급행/완행 서비스 전환 후보는 1호선·4호선·9호선·경의중앙선·수인분당선·경춘선에서만 평가한다.
-
-공항철도 직통열차는 일반 수도권 도시철도 급행 서비스로 취급하지 않는다. 명시적으로 직통으로 분류된 열차와 서울역↔인천공항 소수 정차 직통 패턴은 SQLite 생성 단계에서 제외하며, 공항철도 일반열차만 경로 계산에 사용한다. DB 검증에서도 공항철도 `direct` 서비스가 남아 있으면 빌드를 실패시킨다.
-
-## 환승 데이터 정책
-
-제공된 서울교통공사 환승거리/소요시간 자료를 authoritative source로 먼저 적재한다. KRIC `convenientInfo/stationTransferInfo`는 동일 환승쌍을 덮어쓰지 않으며, 서울교통공사 자료에 없는 환승쌍만 보완한다.
-
-KRIC에서 환승거리 `distance_m`를 얻은 경우 환승시간은 다음 산식만 사용한다.
+KRIC 공식 요일 코드는 다음과 같습니다.
 
 ```text
-seconds = round(distance_m / 1.2)
+DAY = 8   # 평일
+SAT = 7   # 토요일
+END = 9   # 휴일
 ```
 
-즉 보행속도는 초속 1.2m이며 별도 고정 가산시간이나 특정 초값 치환을 사용하지 않는다. 물리적으로 동일 승강장/공용선로인 경우처럼 명시적으로 감사된 구조 정책은 `transfer-policy.ts`의 override가 우선할 수 있다.
+live 빌드는 운영기관/노선/요일별 대표 역에서 먼저 endpoint를 probe합니다.
 
-## 실시간 결합
+1. `trainUseInfo/subwayTimetableExp`
+2. `trainUseInfo/subwayTimetable`
+3. `convenientInfo/stationTimetable`
 
-서울 실시간 API는 기존 노선 ID(1001~1009, 1063, 1065, 1067, 1075, 1077, 1081, 1093, GTX-A 1032)를 유지한다. 실시간 열차번호/역명을 SQLite `trip`/`station`과 매칭해 지연을 계산한다. 실시간이 없는 인천1·2호선, 에버라인, 의정부경전철, 우이신설선, 신림선, 김포골드라인은 SQLite 시간표만 사용한다.
+작동하는 endpoint를 source/day마다 한 번 결정한 뒤 해당 endpoint로 역별 fan-out을 수행합니다. 따라서 지원되지 않는 endpoint를 모든 역에서 반복 재시도하지 않습니다. 기본 동시성은 live timetable build에서 16이며 `TRANSIT_BUILD_CONCURRENCY`로 조정할 수 있습니다.
 
-GTX-A도 더 이상 별도 하드코딩 시간표를 사용하지 않고 SQLite 시간표를 사용하되, 서울 실시간 위치와 북부/남부 토폴로지 분리는 유지한다.
+KRIC가 `dayCd=7`에 대해 모든 대표 source에서 빈 응답을 돌려주는 경우 수백 건의 SAT 요청을 계속하지 않습니다. SAT fan-out을 중단하고 해당 논리 노선에 대해 END 시간표를 명시적 fallback으로 복제하며 `metadata.sat_schedule_fallback`에 기록합니다. 이는 upstream KRIC SAT 데이터가 비어 있는 경우에만 작동하는 fail-safe입니다.
+
+CI는 `TRANSIT_DATA_MODE=fixture`로 동일 스키마를 외부 API 없이 검증합니다.
+
+## 환승 데이터: build-time 토폴로지, runtime 거리
+
+제공된 서울교통공사 2025-12-31 환승거리/시간은 build-time authoritative source입니다.
+
+KRIC `convenientInfo/stationTransferInfo`는 **배포 시 전수 호출하지 않습니다**. 각 물리 `station_id`에 연결된 논리 노선이 `n`개라면 `n*(n-1)/2`개의 unordered transfer pair를 생성하고, 서울교통공사에 없는 directed row를 `runtime-kric-pending`으로 저장합니다.
+
+실제 경로 후보가 이 pending pair를 사용할 때만 KRIC를 조회합니다. 응답의 `chtnLn`으로 대상 노선을 구분하고 `chtnDst`를 pair별로 선택한 뒤 다음 산식을 적용합니다.
+
+```text
+seconds = round(chtnDst_m / 1.2)
+```
+
+결과는 pair 단위로 Valkey/메모리에 캐시합니다. 한 환승역의 여러 노선쌍을 하나의 거리로 축약하지 않습니다.
+
+## SQLite 정규형
+
+- `source_registry`: 운영기관/노선 코드와 논리 노선
+- `station`, `station_source`: 물리 역사와 각 데이터 소스 역사 코드
+- `trip`, `trip_source`, `stop_time`: DAY/SAT/END 열차/정차시각
+- `ride_edge`: 시간표에서 집계한 인접역 운행시간
+- `transfer_pair`: authoritative transfer 또는 runtime KRIC pending pair
+- `transfer_detail`: 방향별 빠른 환승 위치
+- `holiday`: 운행일 판정
+- `metadata`, `build_source`: provenance와 build diagnostics
+
+## 공항철도 직통
+
+공항철도 직통열차는 수도권 전철 급행으로 취급하지 않으며 생성 DB에서 제외합니다. 공항철도 일반열차만 경로 계산에 사용합니다.
+
+## Vercel
+
+Function bundle에는 `data/*.sqlite`만 내부 파일로 포함합니다. immutable deployment filesystem에서 SQLite를 직접 열지 않고 cold start 시 `/tmp`로 복사한 뒤 read-only로 엽니다.
+
+Preview에 KRIC 키가 없으면 fixture DB를 생성할 수 있습니다. KRIC 키가 제공된 live Preview/Production은 위 최적화된 timetable builder를 사용합니다. 환승거리 KRIC 호출은 live build 시간에 포함되지 않습니다.
 
 ## 시크릿
 
-`SEOUL_API_KEY`, `KRIC_API_KEY`는 환경변수에서만 읽는다. DB의 `metadata/build_source`, 로그, PR 본문, 원천 TSV에 키나 키가 포함된 URL을 저장하지 않는다.
+`SEOUL_API_KEY`, `KRIC_API_KEY`는 환경변수에서만 읽습니다. 키 값이나 키가 포함된 URL을 로그, DB metadata, TSV, PR 본문에 저장하지 않습니다.
