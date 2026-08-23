@@ -14,12 +14,12 @@ import {
   calculateRoute as calculateRouteImpl,
 } from "./eta-service";
 import {
-  calculateGtxHybridAuto,
   calculateGtxHybridRoute,
   calculateGtxHybridTrip,
   GTX_LINES,
   isGtxLine,
 } from "./gtx-service";
+import { calculateExpandedAutoRoute } from "./auto-route-service";
 import {
   nowKst,
   resolveServiceMode,
@@ -30,11 +30,6 @@ import {
 } from "./timetable-service";
 import { stationSelector } from "./routing-service";
 import { DISJOINT_HOMONYM_STATIONS } from "./station-identity";
-import {
-  prepareRuntimeTransfersForResult,
-  prepareRuntimeTransfersForSegments,
-  runtimeKricTransferSnapshot,
-} from "./kric-transfer-service";
 import { cacheSnapshot } from "../infra/cache";
 import { debugEnabled } from "../infra/observability";
 import type {
@@ -143,7 +138,6 @@ export async function calculateRoute(
   fetchImpl: FetchLike = fetch,
 ): Promise<Serialized> {
   const typed = payload as unknown as CalculateRoutePayload;
-  await prepareRuntimeTransfersForSegments(typed.segments, fetchImpl);
   const result = !typed.segments.some((segment) => isGtxLine(String(segment.line)))
     ? await calculateRouteImpl(typed, positionCache, fetchImpl)
     : await calculateGtxHybridRoute(
@@ -158,7 +152,7 @@ async function calculateAutoRouteOnce(
   typed: AutoRoutePayload,
   fetchImpl: FetchLike,
 ): Promise<Serialized> {
-  return calculateGtxHybridAuto(
+  return calculateExpandedAutoRoute(
     typed,
     (next) => calculateRouteImpl(next, undefined, fetchImpl),
     fetchImpl,
@@ -170,14 +164,7 @@ export async function calculateAutoRoute(
   fetchImpl: FetchLike = fetch,
 ): Promise<Serialized> {
   const typed = payload as unknown as AutoRoutePayload;
-  let result = await calculateAutoRouteOnce(typed, fetchImpl);
-
-  if (
-    result.ok !== false
-    && await prepareRuntimeTransfersForResult(result as Record<string, unknown>, fetchImpl)
-  ) {
-    result = await calculateAutoRouteOnce(typed, fetchImpl);
-  }
+  const result = await calculateAutoRouteOnce(typed, fetchImpl);
   return publicizeResult(result);
 }
 
@@ -186,7 +173,6 @@ export async function calculateLiveTrip(
   fetchImpl: FetchLike = fetch,
 ): Promise<Serialized> {
   const typed = payload as unknown as LiveTripPayload;
-  await prepareRuntimeTransfersForSegments(typed.segments, fetchImpl);
   const result = !typed.segments.some((segment) => isGtxLine(String(segment.line)))
     ? await calculateLiveTripImpl(typed, fetchImpl)
     : await calculateGtxHybridTrip(
@@ -230,7 +216,8 @@ export function healthSnapshot(): Record<string, unknown> {
       runtime_missing_duration: 0,
       crowding_cap: 1.75,
       homonym_line_selection: true,
-      kric_runtime: runtimeKricTransferSnapshot(),
+      kric_runtime_distance: false,
+      kric_location_hints: "daily-build-only-lowest-priority",
     },
     gtx_a: {
       mode: "sqlite-timetable+realtime",
