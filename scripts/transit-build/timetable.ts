@@ -3,7 +3,7 @@ import type { TransitServiceDay } from "../../src/infra/transit-schema";
 import {
   ALLOW_PARTIAL,
   BUILD_CONCURRENCY,
-  DAYS,
+  API_DAYS,
   KRIC_BASE,
   SUPPORTED_LINES,
   buildSource,
@@ -345,13 +345,8 @@ function duplicateHolidayAsSaturday(
   events: Map<string, Event[]>,
   lines: readonly string[],
 ): string[] {
-  const fallbackLines: string[] = [];
+  const copied: string[] = [];
   for (const line of lines) {
-    const hasSaturday = [...events.keys()].some((key) => {
-      const [eventLine, day] = key.split("\u0001");
-      return eventLine === line && day === "SAT";
-    });
-    if (hasSaturday) continue;
     const holidayGroups = [...events.entries()].filter(([key]) => {
       const [eventLine, day] = key.split("\u0001");
       return eventLine === line && day === "END";
@@ -359,14 +354,56 @@ function duplicateHolidayAsSaturday(
     if (!holidayGroups.length) continue;
     for (const [key, group] of holidayGroups) {
       const [, , trainNo] = key.split("\u0001");
-      events.set(
-        `${line}\u0001SAT\u0001${trainNo}`,
-        group.map((event) => ({ ...event, day: "SAT" as const })),
-      );
+      events.set(`${line}\u0001SAT\u0001${trainNo}`, group.map((event) => ({ ...event, day: "SAT" as const })));
     }
-    fallbackLines.push(line);
+    copied.push(line);
   }
-  return fallbackLines;
+  return copied;
+}
+
+function trustedTrainNumberExpress(line: string, trainNo: string): boolean {
+  return line === "1호선" && /^K19\d{2}$/i.test(trainNo.trim());
+}
+
+function inferServiceKinds(events: Map<string, Event[]>): Map<string, "local" | "express" | "direct"> {
+  const kinds = new Map<string, "local" | "express" | "direct">();
+  for (const [key, group] of events) {
+    const [line, , trainNo] = key.split("\u0001");
+    if (line === "공항철도" && group.some((event) => serviceKind(event.rawKind) === "direct")) { kinds.set(key, "direct"); continue; }
+    let express = trustedTrainNumberExpress(line, trainNo);
+    const bySource = new Map<string, Event[]>();
+    for (const event of group) bySource.set(event.sourceId, [...(bySource.get(event.sourceId) ?? []), event]);
+    for (const sourceEvents of bySource.values()) {
+      const seq = [...new Set(sourceEvents.map((event) => event.sequenceHint).filter(Number.isFinite))].sort((a, b) => a - b);
+      if (seq.some((value, index) => index > 0 && value - seq[index - 1] > 1)) { express = true; break; }
+    }
+    kinds.set(key, express ? "express" : "local");
+  }
+  const pairRuns = new Map<string, Array<{ key: string; dep: number; arr: number }>>();
+  for (const [key, group] of events) {
+    if (kinds.get(key) === "direct") continue;
+    const [line, day] = key.split("\u0001");
+    const ordered = [...group].sort((a, b) => (a.departure ?? a.arrival ?? 0) - (b.departure ?? b.arrival ?? 0));
+    const direction = inferDirection(ordered);
+    for (let i = 0; i < ordered.length - 1; i += 1) {
+      const dep = ordered[i].departure ?? ordered[i].arrival; if (dep === null) continue;
+      for (let j = i + 1; j < Math.min(ordered.length, i + 9); j += 1) {
+        let arr = ordered[j].arrival ?? ordered[j].departure; if (arr === null) continue;
+        while (arr < dep) arr += 86400;
+        const pairKey = `${line}\u0001${day}\u0001${direction}\u0001${ordered[i].stationId}\u0001${ordered[j].stationId}`;
+        pairRuns.set(pairKey, [...(pairRuns.get(pairKey) ?? []), { key, dep, arr }]);
+      }
+    }
+  }
+  for (const runs of pairRuns.values()) {
+    runs.sort((a, b) => a.dep - b.dep || a.arr - b.arr);
+    let slowestPriorArrival = Number.NEGATIVE_INFINITY;
+    for (const run of runs) {
+      if (run.arr + 30 < slowestPriorArrival) kinds.set(run.key, "express");
+      slowestPriorArrival = Math.max(slowestPriorArrival, run.arr);
+    }
+  }
+  return kinds;
 }
 
 export async function loadLiveTimetables(
@@ -393,7 +430,7 @@ export async function loadLiveTimetables(
     if (source.timetable === "0") continue;
     const refs = stationRefsBySource.get(source.source_id) ?? [];
     if (!refs.length) continue;
-    for (const [day, dayCd] of DAYS) sourceDayJobs.push({ source, stations: refs, day, dayCd });
+    for (const [day, dayCd] of API_DAYS) sourceDayJobs.push({ source, stations: refs, day, dayCd });
   }
 
   const plans = await mapConcurrent(
@@ -402,22 +439,12 @@ export async function loadLiveTimetables(
     discoverEndpoint,
   );
   const discoveryRequests = plans.reduce((sum, plan) => sum + plan.requests, 0);
-  const satPlans = plans.filter((plan) => plan.job.day === "SAT");
-  const globalSaturdayUnavailable = satPlans.length > 0 && satPlans.every((plan) => !plan.endpoint);
-  if (globalSaturdayUnavailable) {
-    console.warn(
-      "[build:data] KRIC dayCd=7 returned no timetable rows from representative "
-      + "operator/line probes. Saturday station fanout is skipped; END is used "
-      + "only as an explicit, metadata-recorded SAT fallback.",
-    );
-  }
 
   const events = new Map<string, Event[]>();
   const endpointRows: Record<EndpointId, number> = { exp: 0, base: 0, station: 0 };
   let apiRows = 0;
 
   for (const plan of plans) {
-    if (plan.job.day === "SAT" && globalSaturdayUnavailable) continue;
     if (!plan.endpoint) continue;
     for (const probe of plan.probeRows) {
       const added = appendRows(events, plan.job.source, probe.ref, plan.job.day, probe.rows);
@@ -428,7 +455,6 @@ export async function loadLiveTimetables(
 
   const stationJobs: StationJob[] = [];
   for (const plan of plans) {
-    if (plan.job.day === "SAT" && globalSaturdayUnavailable) continue;
     if (!plan.endpoint) continue;
     const probedCodes = new Set(plan.probeRows.map((probe) => probe.ref.station.station_code));
     for (const ref of plan.job.stations) {
@@ -462,15 +488,10 @@ export async function loadLiveTimetables(
   }
 
   const fallbackLines = duplicateHolidayAsSaturday(events, SUPPORTED_LINES);
-  metadata(db, "sat_schedule_fallback", fallbackLines.length
-    ? `END:${fallbackLines.join(",")}`
-    : "none");
-  if (fallbackLines.length) {
-    console.warn(
-      `[build:data] explicit END→SAT fallback applied to ${fallbackLines.length} lines: ${fallbackLines.join(", ")}`,
-    );
-  }
+  metadata(db, "sat_schedule_source", `END(dayCd=9):${fallbackLines.join(",")}`);
+  console.log(`[build:data] Saturday uses END(dayCd=9) for ${fallbackLines.length} supported lines; KRIC dayCd=7 requests=0`);
 
+  const inferredKinds = inferServiceKinds(events);
   db.transaction(() => {
     for (const [key, group] of events) {
       const [line, day, trainNo] = key.split("\u0001") as [
@@ -478,9 +499,7 @@ export async function loadLiveTimetables(
         TransitServiceDay,
         string,
       ];
-      const kind = group
-        .map((event) => serviceKind(event.rawKind))
-        .sort((a, b) => servicePriority(b) - servicePriority(a))[0] ?? "local";
+      const kind = inferredKinds.get(key) ?? "local";
       insertTrip(
         db,
         line,
@@ -506,7 +525,7 @@ export async function loadLiveTimetables(
     `[build:data] KRIC timetable: discovery_requests=${discoveryRequests}, `
     + `station_requests=${stationRequests}, concurrency=${TIMETABLE_CONCURRENCY}, `
     + `rows=${apiRows}, endpoint_rows=${JSON.stringify(endpointRows)}, `
-    + `day_rows=${JSON.stringify(dayRows)}, SAT_fallback_lines=${fallbackLines.length}`,
+    + `day_rows=${JSON.stringify(dayRows)}, SAT_from_END_lines=${fallbackLines.length}, dayCd7_requests=0`,
   );
 
   buildSource(
@@ -514,21 +533,21 @@ export async function loadLiveTimetables(
     "kric-timetable-exp",
     `${KRIC_BASE}/trainUseInfo/subwayTimetableExp`,
     endpointRows.exp,
-    "per-source/day endpoint discovery then station fanout; credentials omitted",
+    "KRIC-first per-source/day endpoint discovery for dayCd 8/9 only; credentials omitted",
   );
   buildSource(
     db,
     "kric-timetable-base-fallback",
     `${KRIC_BASE}/trainUseInfo/subwayTimetable`,
     endpointRows.base,
-    "fallback endpoint selected once per source/day; credentials omitted",
+    "fallback endpoint for dayCd 8/9 only; credentials omitted",
   );
   buildSource(
     db,
     "kric-station-timetable-fallback",
     `${KRIC_BASE}/convenientInfo/stationTimetable`,
     endpointRows.station,
-    "last endpoint selected once per source/day; credentials omitted",
+    "last endpoint for dayCd 8/9 only; credentials omitted",
   );
   metadata(db, "kric_timetable_requests", discoveryRequests + stationRequests);
   metadata(db, "kric_timetable_concurrency", TIMETABLE_CONCURRENCY);

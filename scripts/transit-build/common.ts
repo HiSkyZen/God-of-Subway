@@ -6,8 +6,8 @@ import type { TransitServiceDay } from "../../src/infra/transit-schema";
 export const ROOT = resolve(import.meta.dir, "../..");
 export const DATASETS = resolve(ROOT, "datasets");
 export const KRIC_BASE = (Bun.env.KRIC_API_BASE_URL?.trim() || "https://openapi.kric.go.kr/openapi").replace(/\/$/, "");
-export const TRANSFER_SPEED_MPS = 1.2;
-export const DAYS: ReadonlyArray<[TransitServiceDay, string]> = [["DAY", "8"], ["SAT", "7"], ["END", "9"]];
+export const API_DAYS: ReadonlyArray<[Exclude<TransitServiceDay, "SAT">, string]> = [["DAY", "8"], ["END", "9"]];
+export const DAYS: ReadonlyArray<[TransitServiceDay, string]> = [["DAY", "8"], ["SAT", "9"], ["END", "9"]];
 export const SUPPORTED_LINES = [
   "1호선", "2호선", "3호선", "4호선", "5호선", "6호선", "7호선", "8호선", "9호선",
   "경의중앙선", "공항철도", "경춘선", "수인분당선", "신분당선", "경강선", "서해선",
@@ -82,7 +82,7 @@ export function collectApiRows(value: unknown, predicate: (row: ApiRow) => boole
   if (!value || typeof value !== "object") return out; const row = value as ApiRow; if (predicate(row)) out.push(row);
   for (const child of Object.values(row)) if (child && typeof child === "object") collectApiRows(child, predicate, out); return out;
 }
-export function serviceKind(raw: unknown): "local" | "express" | "direct" { const text = String(raw ?? "").trim().toLowerCase(); if (/직통|direct/.test(text)) return "direct"; if (text === "1" || /급행|특급|express|rapid/.test(text)) return "express"; return "local"; }
+export function serviceKind(raw: unknown): "local" | "express" | "direct" { const text = String(raw ?? "").trim().toLowerCase(); if (/직통|direct/.test(text)) return "direct"; if (/급행|특급|express|rapid/.test(text)) return "express"; return "local"; }
 export function servicePriority(kind: string): number { return kind === "express" ? 20 : 10; }
 
 export async function mapConcurrent<T, R>(items: readonly T[], limit: number, worker: (item: T, index: number) => Promise<R>): Promise<R[]> {

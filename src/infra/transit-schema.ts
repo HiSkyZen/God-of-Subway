@@ -1,4 +1,4 @@
-export const TRANSIT_SCHEMA_VERSION = 1;
+export const TRANSIT_SCHEMA_VERSION = 2;
 
 export const TRANSIT_SCHEMA_SQL = `
 PRAGMA foreign_keys = ON;
@@ -114,6 +114,21 @@ CREATE TABLE IF NOT EXISTS transfer_detail (
   source TEXT NOT NULL DEFAULT ''
 );
 CREATE INDEX IF NOT EXISTS transfer_detail_pair_idx ON transfer_detail(station_id, from_line, to_line);
+
+CREATE TABLE IF NOT EXISTS transfer_location_hint (
+  hint_id INTEGER PRIMARY KEY,
+  station_id INTEGER NOT NULL REFERENCES station(station_id),
+  from_line TEXT NOT NULL,
+  to_line TEXT NOT NULL,
+  raw_start_location TEXT NOT NULL DEFAULT '',
+  raw_end_location TEXT NOT NULL DEFAULT '',
+  parsed_alight_car TEXT NOT NULL DEFAULT '',
+  parsed_alight_door TEXT NOT NULL DEFAULT '',
+  parsed_board_car TEXT NOT NULL DEFAULT '',
+  parsed_board_door TEXT NOT NULL DEFAULT '',
+  source TEXT NOT NULL DEFAULT ''
+);
+CREATE INDEX IF NOT EXISTS transfer_location_hint_pair_idx ON transfer_location_hint(station_id, from_line, to_line);
 
 CREATE TABLE IF NOT EXISTS holiday (
   date TEXT PRIMARY KEY,
