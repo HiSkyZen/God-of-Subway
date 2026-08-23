@@ -1,16 +1,16 @@
 import { Database } from "bun:sqlite";
-import { DISJOINT, KRIC_BASE, buildSource, cleanName } from "./common";
+import { KRIC_BASE, buildSource, cleanName } from "./common";
 import { unorderedLinePairs, unorderedTransferPairCount } from "../../src/infra/transfer-pairs";
 
 /**
  * Seed routing topology for every physical transfer pair without calling KRIC.
  *
- * A station with n logical lines has nC2 distinct physical line-pairs. SQLite
- * stores directed routing edges, so each unordered pair can produce two rows.
- * Existing Seoul Metro rows are authoritative and INSERT OR IGNORE preserves
- * them. The 180-second value is only a routing placeholder: runtime KRIC
- * enrichment replaces pending pairs with round(chtnDst / 1.2) before final ETA
- * scoring.
+ * A physical station with n logical lines has nC2 distinct unordered line-pairs.
+ * SQLite stores directed routing edges, so each unordered pair can produce two
+ * rows. Existing Seoul Metro rows are authoritative and INSERT OR IGNORE keeps
+ * them unchanged. The 180-second value is a routing placeholder only: runtime
+ * KRIC enrichment replaces pending pairs with round(chtnDst / 1.2) before final
+ * ETA scoring.
  */
 export function seedRuntimeTransferPlaceholders(db: Database): {
   physicalPairs: number;
@@ -38,27 +38,21 @@ export function seedRuntimeTransferPlaceholders(db: Database): {
   db.transaction(() => {
     for (const row of stations) {
       const station = cleanName(row.canonical_name);
-      const lines = [...new Set(row.lines.split(",").map((line) => line.trim()).filter(Boolean))].sort();
+      const lines = [...new Set(
+        row.lines.split(",").map((line) => line.trim()).filter(Boolean),
+      )].sort();
+      const pairs = unorderedLinePairs(lines);
       const expected = unorderedTransferPairCount(lines.length);
-      let stationPairs = 0;
+      if (pairs.length !== expected) {
+        throw new Error(
+          `환승쌍 nC2 생성 실패: ${station} lines=${lines.length} pairs=${pairs.length}/${expected}`,
+        );
+      }
 
-      for (const [a, b] of unorderedLinePairs(lines)) {
-        if (DISJOINT.has(`${station}|${a}|${b}`) || DISJOINT.has(`${station}|${b}|${a}`)) {
-          continue;
-        }
-        stationPairs += 1;
+      for (const [a, b] of pairs) {
         physicalPairs += 1;
         directedRows += Number(insert.run(row.station_id, a, b).changes || 0);
         directedRows += Number(insert.run(row.station_id, b, a).changes || 0);
-      }
-
-      const disjointAtStation = lines.some((a) =>
-        lines.some((b) => a !== b && DISJOINT.has(`${station}|${a}|${b}`))
-      );
-      if (!disjointAtStation && stationPairs !== expected) {
-        throw new Error(
-          `환승쌍 nC2 불변조건 실패: ${station} lines=${lines.length} pairs=${stationPairs}/${expected}`,
-        );
       }
     }
   })();
