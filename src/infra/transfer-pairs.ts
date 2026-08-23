@@ -1,7 +1,7 @@
 /** Number of distinct unordered line-to-line transfers at one physical station. */
 export function unorderedTransferPairCount(lineCount: number): number {
   const n = Math.max(0, Math.trunc(lineCount));
-  return n * (n - 1) / 2;
+  return n < 2 ? 0 : n * (n - 1) / 2;
 }
 
 export function unorderedLinePairs(lines: readonly string[]): Array<readonly [string, string]> {
