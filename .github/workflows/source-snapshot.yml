@@ -1,0 +1,23 @@
+name: Source Snapshot
+
+on:
+  pull_request:
+    branches: [dev/ts-bun]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  snapshot:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+      - uses: actions/upload-artifact@v4
+        with:
+          name: source-tree
+          path: .
+          include-hidden-files: true
+          retention-days: 1
