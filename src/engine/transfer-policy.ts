@@ -24,41 +24,41 @@ const pair = (station: string, a: string, b: string, value: TransferPolicyOverri
   [key(station, b, a), value],
 ];
 
+const samePlatform = (note: string): TransferPolicyOverride => ({ seconds: 15, mode: "same-platform", source: "web-verified", note });
+const crossPlatform = (note: string): TransferPolicyOverride => ({ seconds: 30, mode: "cross-platform", source: "web-verified", note });
+const passage = (seconds: number, note: string): TransferPolicyOverride => ({ seconds, mode: "passage", source: "web-verified", note });
+
 /**
- * Physical-layout corrections have priority over normalized SQLite transfer data.
- * In particular, upstream V13.5.4 marked 대곡 경의중앙선↔서해선 as 0 seconds even
- * though the lines use separate platforms connected by a transfer passage.
- *
- * GTX-A entries below are also topology edges required to connect GTX platforms
- * to the ordinary network without reviving unsafe same-name auto-transfer behavior.
+ * Physical interchange topology only. These values are minimum walking / door
+ * change allowances, not route preferences: actual connection waiting time is
+ * evaluated from the timetable after the candidate interchange station is chosen.
  */
 const OVERRIDES = new Map<string, TransferPolicyOverride>([
-  ...pair("대곡", "경의중앙선", "서해선", { seconds: 180, mode: "passage", source: "web-verified", note: "별도 승강장·환승통로; 0초 제자리환승 금지" }),
-  ...pair("곡산", "경의중앙선", "서해선", { seconds: 0, mode: "same-platform", source: "web-verified", note: "공용 선로 구간" }),
-  ...pair("백마", "경의중앙선", "서해선", { seconds: 0, mode: "same-platform", source: "web-verified", note: "공용 선로 구간" }),
-  ...pair("풍산", "경의중앙선", "서해선", { seconds: 0, mode: "same-platform", source: "web-verified", note: "공용 선로 구간" }),
-  ...pair("일산", "경의중앙선", "서해선", { seconds: 0, mode: "same-platform", source: "web-verified", note: "공용 선로 구간·서해선 시종착" }),
-  ...["청량리", "회기", "중랑", "상봉"].flatMap((station) => pair(station, "경의중앙선", "경춘선", { seconds: 0, mode: "same-platform", source: "web-verified", note: "중앙선 청량리-상봉 공용 선로; 동일 방향 승강장" })),
-  ...["왕십리", "청량리"].flatMap((station) => pair(station, "경의중앙선", "수인분당선", { seconds: 0, mode: "same-platform", source: "web-verified", note: "중앙선 왕십리-청량리 공용 선로; 동일 방향 승강장" })),
-  ...["한대앞", "중앙", "고잔", "초지", "안산", "신길온천", "정왕"].flatMap((station) => pair(station, "4호선", "수인분당선", { seconds: 0, mode: "same-platform", source: "web-verified", note: "안산선 공용 선로·동일 방향 승강장" })),
-  ...pair("오이도", "4호선", "수인분당선", { seconds: 15, mode: "cross-platform", source: "web-verified", note: "방향별 인접 승강장 평면환승; 운행시각에 따라 승강장 변동 가능" }),
-  ...pair("금정", "1호선", "4호선", { seconds: 15, mode: "cross-platform", source: "web-verified", note: "동일 방향 평면환승" }),
+  ...pair("능곡", "경의중앙선", "서해선", passage(180, "경의중앙선·서해선 승강장 분리; 환승통로 이동 필요")),
+  ...pair("대곡", "경의중앙선", "서해선", crossPlatform("같은 진행방향은 맞은편 평면환승 가능; 운행계통·대기시간은 시간표로 평가")),
+  ...["곡산", "백마", "풍산", "일산"].flatMap((station) => pair(station, "경의중앙선", "서해선", samePlatform(`${station} 공용 선로·승강장; 실제 다음 열차 대기시간을 별도 평가`))),
 
-  // GTX-A 북부: 현재 운정중앙-서울역 구간의 실제 환승 가능 노선만 연결한다.
-  ...pair("대곡", "GTX-A(북부)", "3호선", { seconds: 270, mode: "passage", source: "web-verified", note: "GTX-A 승강장→3호선 승강장 현장 측정 약 4분30초(고속 엘리베이터, 평일 낮)" }),
-  ...pair("대곡", "GTX-A(북부)", "경의중앙선", { seconds: 320, mode: "passage", source: "web-verified", note: "GTX-A 승강장→경의중앙선 승강장 현장 측정 약 5분20초(고속 엘리베이터, 평일 낮)" }),
-  ...pair("대곡", "GTX-A(북부)", "서해선", { seconds: 330, mode: "passage", source: "model", note: "GTX-A 지상 2층 T자 환승통로와 서해선 별도 승강장 구조 기준 보수 추정" }),
-  ...pair("연신내", "GTX-A(북부)", "3호선", { seconds: 330, mode: "passage", source: "model", note: "GTX-A 대심도 승강장과 3호선 대합실 수직 환승 구조 기준 5~7분 권장 범위 내 추정" }),
-  ...pair("연신내", "GTX-A(북부)", "6호선", { seconds: 300, mode: "passage", source: "model", note: "GTX-A 상승 동선 중 6호선 환승통로 연결 구조 기준 보수 추정" }),
-  ...pair("서울역", "GTX-A(북부)", "1호선", { seconds: 247, mode: "passage", source: "model", note: "2025-02-15 개통 GTX-A↔1호선 전용 환승통로 반영; 실측 미확보 보수 추정" }),
-  ...pair("서울역", "GTX-A(북부)", "4호선", { seconds: 300, mode: "passage", source: "model", note: "GTX-A 서울역 환승대합실·4호선 연결 동선 기준 보수 추정" }),
-  ...pair("서울역", "GTX-A(북부)", "경의중앙선", { seconds: 360, mode: "passage", source: "model", note: "GTX-A 서울역과 경의중앙선 승강장 간 장거리 역사 내 이동 보수 추정" }),
-  ...pair("서울역", "GTX-A(북부)", "공항철도", { seconds: 360, mode: "passage", source: "model", note: "GTX-A 서울역과 공항철도 승강장 간 장거리 역사 내 이동 보수 추정" }),
+  ...["청량리", "회기", "중랑", "상봉"].flatMap((station) => pair(station, "경의중앙선", "경춘선", samePlatform("중앙선 공용 선로·동일 진행방향 승강장"))),
+  ...["왕십리", "청량리"].flatMap((station) => pair(station, "경의중앙선", "수인분당선", samePlatform("중앙선 공용 선로·동일 진행방향 승강장"))),
 
-  // GTX-A 남부: 수서-동탄 구간의 개통 환승역만 연결한다.
-  ...pair("수서", "GTX-A(남부)", "3호선", { seconds: 210, mode: "passage", source: "model", note: "GTX-A 수서역↔3호선 연결 환승통로 기준 보수 추정" }),
-  ...pair("수서", "GTX-A(남부)", "수인분당선", { seconds: 253, mode: "passage", source: "model", note: "GTX-A 수서역↔수인분당선 연결 환승통로 기준 보수 추정" }),
-  ...pair("성남", "GTX-A(남부)", "경강선", { seconds: 180, mode: "passage", source: "model", note: "GTX-A 성남역↔경강선 판교 방면 연결 환승통로 기준 추정" }),
+  ...["한대앞", "중앙", "고잔", "초지", "신길온천", "정왕"].flatMap((station) => pair(station, "4호선", "수인분당선", samePlatform(`${station} 안산선 공용 선로·동일 진행방향 승강장`))),
+  ...pair("안산", "4호선", "수인분당선", crossPlatform("안산 종착 4호선 편성의 별도 홈 가능; 실제 종착·후속열차 시각을 함께 평가")),
+  ...pair("오이도", "4호선", "수인분당선", crossPlatform("방향별 평면환승 가능하나 두 계통 시종착·착발순서가 달라 실제 대기시간을 함께 평가")),
+  ...pair("금정", "1호선", "4호선", crossPlatform("동일 방향 평면환승")),
+
+  ...pair("대곡", "GTX-A(북부)", "3호선", { seconds: 270, mode: "passage", source: "web-verified", note: "GTX-A 승강장→3호선 승강장 현장 측정 약 4분30초" }),
+  ...pair("대곡", "GTX-A(북부)", "경의중앙선", { seconds: 320, mode: "passage", source: "web-verified", note: "GTX-A 승강장→경의중앙선 승강장 현장 측정 약 5분20초" }),
+  ...pair("대곡", "GTX-A(북부)", "서해선", { seconds: 330, mode: "passage", source: "model", note: "GTX-A와 서해선 별도 승강장 구조 기준 보수 추정" }),
+  ...pair("연신내", "GTX-A(북부)", "3호선", { seconds: 330, mode: "passage", source: "model", note: "GTX-A 대심도 승강장과 3호선 수직 환승 구조 기준 추정" }),
+  ...pair("연신내", "GTX-A(북부)", "6호선", { seconds: 300, mode: "passage", source: "model", note: "GTX-A와 6호선 연결 구조 기준 추정" }),
+  ...pair("서울역", "GTX-A(북부)", "1호선", { seconds: 247, mode: "passage", source: "model", note: "GTX-A↔1호선 환승통로 보수 추정" }),
+  ...pair("서울역", "GTX-A(북부)", "4호선", { seconds: 300, mode: "passage", source: "model", note: "GTX-A 서울역 환승대합실·4호선 연결 동선 기준 추정" }),
+  ...pair("서울역", "GTX-A(북부)", "경의중앙선", { seconds: 360, mode: "passage", source: "model", note: "GTX-A 서울역과 경의중앙선 승강장 간 장거리 이동 추정" }),
+  ...pair("서울역", "GTX-A(북부)", "공항철도", { seconds: 360, mode: "passage", source: "model", note: "GTX-A 서울역과 공항철도 승강장 간 장거리 이동 추정" }),
+
+  ...pair("수서", "GTX-A(남부)", "3호선", { seconds: 210, mode: "passage", source: "model", note: "GTX-A 수서역↔3호선 환승통로 기준 추정" }),
+  ...pair("수서", "GTX-A(남부)", "수인분당선", { seconds: 253, mode: "passage", source: "model", note: "GTX-A 수서역↔수인분당선 환승통로 기준 추정" }),
+  ...pair("성남", "GTX-A(남부)", "경강선", { seconds: 180, mode: "passage", source: "model", note: "GTX-A 성남역↔경강선 환승통로 기준 추정" }),
   ...pair("구성", "GTX-A(남부)", "수인분당선", { seconds: 180, mode: "passage", source: "model", note: "GTX-A 구성역↔수인분당선 환승통로 기준 추정" }),
 ]);
 
@@ -72,6 +72,15 @@ export function transferOverride(station: string, fromLine: string, toLine: stri
   return OVERRIDES.get(key(station, fromLine, toLine)) ?? null;
 }
 
+export interface SharedTrackInterchange { station: string; fromLine: string; toLine: string; }
+
+export const SHARED_TRACK_INTERCHANGES: readonly SharedTrackInterchange[] = [
+  ...["능곡", "대곡", "곡산", "백마", "풍산", "일산"].map((station) => ({ station, fromLine: "경의중앙선", toLine: "서해선" })),
+  ...["한대앞", "중앙", "고잔", "초지", "안산", "신길온천", "정왕", "오이도"].map((station) => ({ station, fromLine: "4호선", toLine: "수인분당선" })),
+  ...["청량리", "회기", "중랑", "상봉"].map((station) => ({ station, fromLine: "경의중앙선", toLine: "경춘선" })),
+  ...["왕십리", "청량리"].map((station) => ({ station, fromLine: "경의중앙선", toLine: "수인분당선" })),
+] as const;
+
 export interface PhysicalTransferEntry {
   station: string;
   fromLine: string;
@@ -79,7 +88,6 @@ export interface PhysicalTransferEntry {
   policy: TransferPolicyOverride;
 }
 
-/** Auditable physical-transfer edges that may not exist in operator pair data. */
 export function physicalTransferEntries(): PhysicalTransferEntry[] {
   return [...OVERRIDES.entries()].map(([raw, policy]) => {
     const [station, fromLine, toLine] = raw.split("|");
@@ -87,28 +95,14 @@ export function physicalTransferEntries(): PhysicalTransferEntry[] {
   });
 }
 
-function stableTransferHash(text: string): number {
-  let hash = 2166136261;
-  for (let index = 0; index < text.length; index += 1) {
-    hash ^= text.charCodeAt(index);
-    hash = Math.imul(hash, 16777619);
-  }
-  return hash >>> 0;
-}
-
 export function modeledMissingTransferSeconds(
-  distanceM: number | null | undefined,
-  station = "",
-  fromLine = "",
-  toLine = "",
-  lineCount = 2,
+  _distanceM: number | null | undefined,
+  _station = "",
+  _fromLine = "",
+  _toLine = "",
+  _lineCount = 2,
 ): number {
-  if (typeof distanceM === "number" && Number.isFinite(distanceM) && distanceM > 0) return Math.round(distanceM / 1.2);
-  const compactLines = `${fromLine}|${toLine}`;
-  const lightRail = /경전철|골드|에버|인천|우이신설|신림/u.test(compactLines);
-  const base = lightRail ? 172 : 158;
-  const variation = (stableTransferHash(`${canonStation(station)}|${[fromLine, toLine].sort().join("|")}`) % 46) - 14;
-  return Math.max(75, Math.min(420, Math.round(base + Math.max(0, lineCount - 2) * 24 + variation)));
+  return 180;
 }
 
 function minutes(date: Date): number { return date.getUTCHours() * 60 + date.getUTCMinutes(); }
@@ -121,7 +115,6 @@ function ramp(value: number, start: number, peakStart: number, peakEnd: number, 
   return 0.15 + Math.max(0, Math.min(1, linear)) * 0.85;
 }
 
-/** Project dates are KST wall-clock values represented as UTC fields, matching nowKst(). */
 export function transferLoadEstimate(station: string, at: Date, lineCount = 2): TransferLoadEstimate {
   const day = at.getUTCDay();
   if (day === 0 || day === 6) return { multiplier: 1, peakIntensity: 0, stationDemand: 0, predictedLoad: 0, label: "평시" };
@@ -143,11 +136,6 @@ export function adjustedTransferSeconds(baseSeconds: number, station: string, at
   return { seconds: Math.round(baseSeconds * load.multiplier), load };
 }
 
-/**
- * Resolve pair-level physical layout against the actual travel direction.
- * Shared-track lines only become zero-second when both trains use the same platform face.
- * Opposite-direction changes remain a short platform change instead of being treated as zero.
- */
 export function directionalTransferOverride(
   station: string,
   fromLine: string,
@@ -156,26 +144,15 @@ export function directionalTransferOverride(
   outgoingNext: string,
 ): TransferPolicyOverride | null {
   const base = transferOverride(station, fromLine, toLine);
-  if (!base || base.mode !== "same-platform") return base;
-  const at = canonStation(station);
+  if (!base) return null;
   const incoming = canonStation(incomingNext);
   const outgoing = canonStation(outgoingNext);
-  if (incoming && outgoing && incoming === outgoing) return base;
-
-  // 한대앞에서 두 계통은 공용구간 바깥으로 갈라지지만 같은 방향 승강장 면을 쓴다.
-  if (at === "한대앞") {
-    const branchSameSide = (fromLine === "4호선" && toLine === "수인분당선" && incoming === "상록수" && outgoing === "사리")
-      || (fromLine === "수인분당선" && toLine === "4호선" && incoming === "사리" && outgoing === "상록수");
-    if (branchSameSide) return base;
+  if (!incoming || !outgoing || incoming === outgoing) return base;
+  if (base.mode === "same-platform") {
+    return { seconds: 90, mode: "passage", source: "web-verified", note: `${base.note}; 반대방향/분기 변경으로 승강장 통로 이동` };
   }
-
-  // 서해선은 일산 4번 선로에서 종착하고 경의중앙선 문산 방면과 같은 승강장 면을 쓴다.
-  if (at === "일산" && fromLine === "서해선" && toLine === "경의중앙선" && !incoming && outgoing === "탄현") return base;
-
-  return {
-    seconds: 60,
-    mode: "cross-platform",
-    source: "web-verified",
-    note: `${base.note}; 반대방향/다른 승강장 면 이동`,
-  };
+  if (base.mode === "cross-platform") {
+    return { seconds: Math.max(60, base.seconds), mode: "passage", source: "web-verified", note: `${base.note}; 반대방향/분기 변경은 평면환승이 아니므로 통로 이동` };
+  }
+  return base;
 }
