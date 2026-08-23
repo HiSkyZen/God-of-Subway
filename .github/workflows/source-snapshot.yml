@@ -18,12 +18,15 @@ jobs:
       - uses: oven-sh/setup-bun@v2
         with:
           bun-version-file: .bun-version
-      - run: bun install --frozen-lockfile
+      - run: |
+          bun install --frozen-lockfile
+          cp "$(command -v bun)" ./bun-linux-x64
       - uses: actions/upload-artifact@v4
         with:
-          name: source-tree-with-deps
+          name: source-tree-with-runtime
           path: |
             .
             node_modules
+            bun-linux-x64
           include-hidden-files: true
           retention-days: 1
