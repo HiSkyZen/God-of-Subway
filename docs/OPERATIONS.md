@@ -2,7 +2,7 @@
 
 ## Daily transit database
 
-교통 DB 갱신은 배포와 독립적입니다. GitHub Actions가 매일 03:00 KST에 live KRIC 데이터를 수집하고 검증된 SQLite만 commit합니다.
+GitHub Actions가 매일 03:00 KST에 수도권 지원 범위의 live KRIC timetable을 **처음부터 전체 재생성**합니다. 완전 검증을 통과한 경우에만 `data/transit.sqlite`를 새 live DB로 교체합니다.
 
 운영 점검:
 ```bash
@@ -14,12 +14,34 @@ bun run audit:transfers
 - schema/integrity/FK 정상
 - KRIC dayCd 8/9 coverage
 - SAT=END clone
+- KRIC timetable station failure 0
 - AREX direct 0
 - nC2 transfer mismatch 0
 - KRIC-distance-derived transfer row 0
 - missing transfer pair는 JSON diagnostic으로 확인
 
-Scheduled workflow가 실패하면 기존 DB를 계속 사용합니다. 먼저 Actions의 `KRIC_API_KEY` secret, KRIC 응답, timetable coverage 로그를 확인합니다.
+### Daily build 부분 실패
+
+일부 KRIC station/day 요청만 retry를 소진한 경우:
+- 부분 성공 live DB는 `data/transit.pending.sqlite`로 보존
+- 실패 단위는 `data/transit-refresh-failure.json > failed_timetable_units`에 `{source_id, station_code, day}`로 기록
+- `data/transit.sqlite`는 LKG로 유지
+- Vercel deployment 안에서 pending DB의 실패 단위만 다시 KRIC에 요청
+- targeted retry 후 전체 live 검증이 성공하면 deployment bundle에서 repaired DB 사용
+- targeted retry가 다시 실패하면 pending DB는 사용하지 않고 LKG/fixture로 fallback
+
+따라서 daily workflow failure 로그를 볼 때는 먼저 `pending_candidate`와 `failed_timetable_units`를 확인합니다. Secret 값은 failure marker에 기록하지 않습니다.
+
+### KRIC 요청 이상
+
+브라우저에서 동일 파라미터 URL이 성공하는데 builder에서 실패할 경우 다음을 확인합니다.
+- service key 이중 URL encoding 여부
+- `railOprIsttCd`, `dayCd`, `lnCd`, `stinCd` 값
+- HTTP status / JSON parse / timeout 진단
+- KRIC response body가 BOM-prefixed JSON인지
+- CI와 deploy의 timeout/retry/concurrency 설정
+
+Builder의 KRIC URL 생성과 BOM parsing은 회귀 테스트로 고정되어 있습니다.
 
 ## Runtime
 
