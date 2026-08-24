@@ -37,7 +37,9 @@ describe("Bun API contract", () => {
     for (const path of ["/", "/api/health", "/missing"]) {
       const response = await request(path);
       const csp = response.headers.get("content-security-policy") || "";
-      expect(csp).toContain("script-src 'self' https://www.googletagmanager.com");
+      expect(csp).toContain("script-src 'self'");
+      expect(csp).not.toContain("google-analytics");
+      expect(csp).not.toContain("googletagmanager");
       expect(csp).toContain("worker-src 'self'");
       expect(csp).toContain("manifest-src 'self'");
       expect(csp).toContain("object-src 'none'");

@@ -3,34 +3,56 @@
 ## 요구사항
 
 - Bun 1.3.14 이상
-- TypeScript는 `devDependencies` 버전을 사용
+- TypeScript는 `devDependencies` 버전 사용
+
+런타임 정적 데이터는 `data/transit.sqlite`입니다.
+
+### 외부 API 없는 개발
 
 ```bash
-bun install
+bun install --frozen-lockfile
+TRANSIT_DATA_MODE=fixture bun run build:data
 bun run doctor
 bun run dev
 ```
 
-`doctor`는 `data/`의 핵심 JSON 데이터셋 존재 여부와 바이트 크기, 환승 데이터 버전을 먼저 확인합니다. 데이터 파일을 바꾸면 `src/engine/data-metadata.ts`의 크기도 같이 갱신해야 합니다.
+### live 데이터 개발
+
+실제 KRIC 시간표를 수동 재생성할 때만 로컬 secret 환경에 `KRIC_API_KEY`를 설정합니다.
+
+```bash
+TRANSIT_DATA_MODE=live bun run build:data
+bun run doctor
+bun run audit:transfers
+```
+
+키 값은 Git 추적 파일, 로그, SQLite metadata에 기록하지 않습니다.
+
+## 정적 원천
+
+- `datasets/kric/*`: KRIC operator/line/station mapping
+- `datasets/transfers/seoul-metro-transfer-times.tsv`: 서울교통공사 authoritative pair
+- `datasets/transfers/upstream-pairs/*.tsv`: offline/fixture upstream fallback snapshot
+- `datasets/stations/coordinates/*`: 예상 운임거리 전용 역사 좌표 snapshot
+- `datasets/calendar/kr-holidays.tsv`: 서비스 운행일 판정
+
+좌표는 환승시간 계산에 사용하지 않습니다.
 
 ## 검증
 
 ```bash
-bun run check
-```
-
-`check`는 데이터 doctor → TypeScript → service worker TypeScript → push architecture → Bun tests 순서로 실행합니다.
-
-개별 데이터 감사:
-
-```bash
+TRANSIT_DATA_MODE=fixture bun run build:data
+bun run doctor
 bun run audit:transfers
+bun run typecheck
+bun run typecheck:sw
+bun run check:architecture
+bun test
+bun run build
+bun run build:client
+bun run scripts/promote-static.ts
+bun run verify:pwa
+bun run verify:aot
 ```
 
-## 모듈 추가 원칙
-
-- 철도 규칙은 `src/engine`에 둡니다.
-- UI 표시 규칙은 `src/client`에 둡니다.
-- 캐시/푸시/관측성은 `src/infra`에 둡니다.
-- 정적 데이터셋은 `data/`에 두고 루트에 개별 JSON을 늘어놓지 않습니다.
-- 데이터 파일의 파생 규칙을 JSON 자체에 무분별하게 섞지 말고, provenance가 필요한 보정은 정책 모듈 또는 감사 가능한 생성 스크립트로 둡니다.
+`doctor`와 `audit:transfers`는 SQLite 무결성/FK, 노선/운행일 커버리지, 환승 provenance, nC2 topology와 KRIC 거리 기반 환승시간 row가 없음을 확인합니다.

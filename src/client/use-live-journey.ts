@@ -1,6 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { apiClient } from "./api";
-import { track } from "./analytics";
 import type { AutoRouteResponse, LiveTripState, RouteResponse, ServiceMode } from "./contract";
 import { localDateTimeString } from "./pure";
 import { alertNeedsTripReplacement } from "./push-alert";
@@ -18,11 +17,8 @@ export interface LiveAlertSnapshot {
 export interface LiveJourneyOptions {
   result: AutoRouteResponse | null;
   day: ServiceMode;
-  baseline: string;
   alert: LiveAlertSnapshot | null;
   notify(message: string): void;
-  onBoardEvent(trip: StoredTrip, index: number, trainNo: string): void;
-  onEtaEvent(result: RouteResponse, kind: string): void;
   onSyncAlert(trip: StoredTrip, quiet: boolean): Promise<unknown | null>;
   onClearAlert(quiet: boolean): Promise<void>;
 }
@@ -91,17 +87,14 @@ export function useLiveJourney(options: LiveJourneyOptions): LiveJourneyControll
         platformStart: currentResult.start_time || null,
         segments: currentResult.segments.map((segment) => ({ line: segment.line, from: segment.from, to: segment.to, transfer_walk: segment.transfer_walk, transfer_seconds: segment.transfer_seconds, transfer_info: segment.transfer_info })),
         day: currentOptions.day,
-        baseline: currentOptions.baseline || null,
         previousNextTrain: null,
         displaySegments: currentResult.segments,
         transferEndsAt: null,
         journeyStartedAt: nowText,
       };
     }
-    currentOptions.onBoardEvent(trip, index, normalizedTrainNo);
     persistLiveTrip(trip);
     setLiveResult(null);
-    track("train_tracking_start", { line: trip.segments[index]?.line, train_no: normalizedTrainNo, segment_index: index + 1 });
     const publicLabel = String(displayLabel ?? "").trim();
     currentOptions.notify(publicLabel ? `${publicLabel}를 추적합니다.` : `${normalizedTrainNo}열차를 추적합니다.`);
     const alert = currentOptions.alert;
@@ -121,7 +114,6 @@ export function useLiveJourney(options: LiveJourneyOptions): LiveJourneyControll
     setLiveTrip(updated);
     writeStorage(sessionStorage, STORAGE_KEYS.liveTrip, updated);
     setLiveResult(next);
-    optionsRef.current.onEtaEvent(next, "route_recalculation");
     return next;
   }, []);
 
@@ -240,7 +232,6 @@ export function useLiveJourney(options: LiveJourneyOptions): LiveJourneyControll
         }
         const alert = optionsRef.current.alert;
         if (alert && !alert.pending_cancel && updated.phase === "ride" && alertNeedsTripReplacement(alert.trip_snapshot, updated)) void optionsRef.current.onSyncAlert(updated, true);
-        optionsRef.current.onEtaEvent(next, "tracking_update");
       } catch (caught: unknown) {
         if (!cancelled) optionsRef.current.notify(caught instanceof Error ? caught.message : "추적 갱신 실패");
       } finally { polling = false; }

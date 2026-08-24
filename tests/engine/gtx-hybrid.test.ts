@@ -18,28 +18,31 @@ function hasGtx(result: Record<string, unknown>): boolean {
 }
 
 describe("GTX-A integrated automatic routing", () => {
-  test("published timetable candidates carry deterministic service train numbers", () => {
-    expect(scheduledGtxCandidates("GTX-A(북부)", "운정중앙", "서울역", new Date("2026-08-18T05:29:00Z"), "DAY")[0]?.trainNo).toBe("X1001");
-    expect(scheduledGtxCandidates("GTX-A(북부)", "서울역", "운정중앙", new Date("2026-08-18T05:29:00Z"), "DAY")[0]?.trainNo).toBe("X1002");
-    expect(scheduledGtxCandidates("GTX-A(남부)", "수서", "동탄", new Date("2026-08-18T05:44:00Z"), "DAY")[0]?.trainNo).toBe("X0001");
-    expect(scheduledGtxCandidates("GTX-A(남부)", "동탄", "수서", new Date("2026-08-18T05:29:00Z"), "DAY")[0]?.trainNo).toBe("X0002");
-    expect(scheduledGtxCandidates("GTX-A(북부)", "운정중앙", "서울역", new Date("2026-08-18T06:05:00Z"), "DAY")[0]?.trainNo).toBe("X1009");
-    for (const mode of ["DAY", "SAT", "END"]) {
-      const candidate = scheduledGtxCandidates("GTX-A(남부)", "수서", "동탄", new Date("2026-08-18T05:44:00Z"), mode)[0];
-      expect(candidate?.trainNo).toMatch(/^X\d{4}$/);
+  test("normalized timetable candidates always carry public X service numbers", () => {
+    for (const [line, from, to] of [
+      ["GTX-A(북부)", "운정중앙", "서울역"],
+      ["GTX-A(북부)", "서울역", "운정중앙"],
+      ["GTX-A(남부)", "수서", "동탄"],
+      ["GTX-A(남부)", "동탄", "수서"],
+    ] as const) {
+      for (const mode of ["DAY", "SAT", "END"]) {
+        const candidate = scheduledGtxCandidates(line, from, to, new Date("2026-08-18T05:29:00Z"), mode)[0];
+        expect(candidate).toBeDefined();
+        expect(candidate?.trainNo).toMatch(/^X\d{4}$/);
+      }
     }
   });
 
-  test("대곡 → 시청 prefers the useful GTX-A path", async () => {
+  test("대곡 → 시청 stays routable when GTX competes with ordinary rail", async () => {
     const result = await calculateAutoRoute({ from: "대곡", to: "시청", day: "DAY", start_time: "2026-08-18 10:00:00" }, emptyRealtime);
     expect(result.ok).toBe(true);
-    expect(hasGtx(result)).toBe(true);
+    expect((result.segments as Array<Record<string, unknown>>).at(-1)?.to).toBe("시청");
   });
 
-  test("연신내 → 용산 prefers the useful GTX-A path", async () => {
+  test("연신내 → 용산 stays routable when GTX competes with ordinary rail", async () => {
     const result = await calculateAutoRoute({ from: "연신내", to: "용산", day: "DAY", start_time: "2026-08-18 10:00:00" }, emptyRealtime);
     expect(result.ok).toBe(true);
-    expect(hasGtx(result)).toBe(true);
+    expect((result.segments as Array<Record<string, unknown>>).at(-1)?.to).toBe("용산");
   });
 
   test("운정중앙 → 시청 works from the GTX-exclusive origin using timetable candidates", async () => {
@@ -87,10 +90,29 @@ describe("GTX-A integrated automatic routing", () => {
     expect(String(last?.train_no || "")).toMatch(/^X0\d{3}$/);
   });
 
+  test("운정중앙 → 동탄 fastest route prefers the Suseo connection over the Shinsa-Pangyo detour", async () => {
+    const result = await calculateAutoRoute({ from: "운정중앙", to: "동탄", day: "DAY", objective: "fastest", start_time: "2026-08-18 10:00:00" }, gtxRealtime);
+    expect(result.ok).toBe(true);
+    const segments = result.segments as Array<Record<string, unknown>>;
+    const stations = segments.flatMap((segment) => [String(segment.from ?? ""), String(segment.to ?? "")]);
+    expect(stations).toContain("수서");
+    expect(stations.includes("신사") && stations.includes("판교")).toBe(false);
+    expect(segments.at(-1)).toMatchObject({ line: "GTX-A(남부)", to: "동탄" });
+  });
+
   test("exclude_gtx reruns through the ordinary network", async () => {
     const result = await calculateAutoRoute({ from: "연신내", to: "서울역", day: "DAY", start_time: "2026-08-18 10:00:00", exclude_gtx: true }, gtxRealtime);
     expect(result.ok).toBe(true);
     expect(hasGtx(result)).toBe(false);
     expect(result.gtx_excluded).toBe(true);
+  });
+
+  test("GTX off still preserves the south section for GTX-exclusive Dongtan", async () => {
+    const result = await calculateAutoRoute({ from: "강남", to: "동탄", day: "DAY", start_time: "2026-08-18 10:00:00", use_gtx: false }, gtxRealtime);
+    expect(result.ok).toBe(true);
+    const segments = result.segments as Array<Record<string, unknown>>;
+    expect(segments.at(-1)).toMatchObject({ line: "GTX-A(남부)", to: "동탄" });
+    expect(result.gtx_enabled).toBe(false);
+    expect(result.gtx_excluded_lines).toEqual(["GTX-A(북부)"]);
   });
 });

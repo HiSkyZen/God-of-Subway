@@ -1,8 +1,8 @@
 import { useEffect, useRef } from "react";
 import type { KeyboardEvent, MouseEvent as ReactMouseEvent, ReactElement, RefObject } from "react";
-import type { AutoRouteResponse, Confidence, ExperimentRecord, LiveTripState, RouteResponse, RouteSegment } from "./contract";
+import type { AutoRouteResponse, Confidence, LiveTripState, RouteResponse, RouteSegment } from "./contract";
 import { useClock } from "./hooks";
-import { experimentMetrics, formatDuration } from "./pure";
+import { formatDuration } from "./pure";
 import { lineBadgeSpec, type StationSuggestion } from "./station-suggestions";
 
 export function formatClock(value?: string | null): string {
@@ -83,15 +83,6 @@ export function LivePanel({ trip, result, alertActive, arrivalAlertCapable, onAl
   return <section className="live-panel"><div><span className="live-dot" /><strong>{title}</strong><p>{currentPosition} · 20초마다 최신 운행정보로 자동 재계산합니다.</p></div><div className="live-stats"><span>현재 열차 <b>{publicTrainNo || (trip.phase === "waiting" ? "선택 대기" : trip.phase === "transfer" ? "환승" : "확인 중")}</b></span><span>현재 위치 <b>{currentPosition}</b></span><span>{trip.phase === "transfer" ? "환승 남은 시간" : trip.phase === "waiting" ? "다음 열차" : trip.activeIndex >= trip.segments.length - 1 ? "목적지 하차까지" : "다음 환승까지"} <b>{trip.phase === "transfer" ? formatDuration(transferRemaining) : trip.phase === "waiting" ? formatClock(current?.board_dt) : formatDuration(remaining)}</b></span></div><div className="live-actions">{trip.phase === "transfer" && <button type="button" onClick={onFinishTransfer}>환승을 마쳤어요</button>}{trip.phase === "waiting" && <span>다음 구간 열차를 자동으로 확인하고 있습니다.</span>}{arrivalAlertCapable === false ? <span className="alert-unavailable">이 배포 환경에서는 백그라운드 도착 알림을 지원하지 않습니다.</span> : trip.phase === "ride" || alertActive ? <button type="button" className={alertActive ? "alert-active" : ""} onClick={alertActive ? onClearAlert : onAlert}>{alertActive ? "도착 알림 해제" : "도착 알림 설정"}</button> : null}{trip.phase === "ride" && <button type="button" onClick={onAlight}>이제 내렸어요</button>}{trip.phase === "done" && <button type="button" onClick={onStop}>여정 종료</button>}</div></section>;
 }
 
-export function ExperimentPanel({ experiments, onArrive, onUpdate, onDelete, onCsv, onJson }: { experiments: ExperimentRecord[]; onArrive: () => void; onUpdate: (id: string, update: Partial<ExperimentRecord>) => void; onDelete: (id: string) => void; onCsv: () => void; onJson: () => void }): ReactElement {
-  const completed = experiments.filter((experiment) => experiment.completed_at && !experiment.excluded);
-  const active = experiments.find((experiment) => !experiment.completed_at && !experiment.excluded);
-  const metrics = completed.map(experimentMetrics);
-  const average = (values: Array<number | null>): number | null => { const valid = values.filter((value): value is number => value != null && Number.isFinite(value)); return valid.length ? valid.reduce((sum, value) => sum + value, 0) / valid.length : null; };
-  const metricText = (value: number | null, suffix = "분"): string => value == null ? "-" : `${value.toFixed(1)}${suffix}`;
-  const reduction = average(metrics.map((metric) => metric.error_reduction_pct));
-  return <section className="experiment-panel"><div className="experiment-header"><div><h2>기말 실험 기록</h2><p>검색 → 탑승 → ETA 갱신 → 실제 도착을 이 브라우저에 기록합니다.</p></div><span>완료 {completed.length}건</span></div><div className="experiment-actions"><button type="button" disabled={!active} onClick={onArrive}>지금 목적지 도착 기록</button><button type="button" onClick={onCsv}>요약 CSV</button><button type="button" onClick={onJson}>상세 JSON</button>{active && <><button type="button" onClick={() => onUpdate(active.id, { excluded: true })}>현재 실험 제외</button><label className="experiment-note">메모<input value={active.note} onChange={(event) => onUpdate(active.id, { note: event.target.value })} placeholder="관찰 메모" /></label></>}</div><div className="experiment-metrics"><span>완료 이동 <b>{completed.length}건</b></span><span>지금타 초기 ETA MAE <b>{metricText(average(metrics.map((metric) => metric.initial_error_min)))}</b></span><span>기존 앱 ETA MAE <b>{metricText(average(metrics.map((metric) => metric.baseline_error_min)))}</b></span><span>ETA 오차 감소 <b>{reduction == null ? "-" : `${reduction.toFixed(0)}%`}</b></span><span>평균 첫 승강장 대기 <b>{metricText(average(metrics.map((metric) => metric.first_platform_wait_min)))}</b></span></div>{experiments.length > 0 && <div className="experiment-history" aria-label="최근 실험 기록">{experiments.slice().reverse().slice(0, 8).map((experiment) => <article key={experiment.id}><div><strong>{experiment.from} → {experiment.to}</strong><span>{experiment.excluded ? "제외" : experiment.completed_at ? "완료" : "기록 중"} · {experiment.created_at}</span>{experiment.note && <small>{experiment.note}</small>}</div><button type="button" onClick={() => onDelete(experiment.id)}>삭제</button></article>)}</div>}</section>;
-}
 
 export type PushPermissionState = "unsupported" | "default" | "granted" | "denied";
 

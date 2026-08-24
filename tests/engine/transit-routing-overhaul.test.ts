@@ -1,7 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import { RAPID_SERVICE_LINES } from "../../src/engine/rapid-service";
 import { autoFindPath, stationRequiresLineSelection, stationSelector, transferSeconds } from "../../src/engine/routing-service";
-import { directionalTransferOverride, transferLoadEstimate } from "../../src/engine/transfer-policy";
+import { directionalTransferOverride, transferLoadEstimate, transferOverride } from "../../src/engine/transfer-policy";
 
 describe("transit routing overhaul", () => {
   test("current rapid-service coverage is explicit", () => {
@@ -16,16 +16,29 @@ describe("transit routing overhaul", () => {
     expect(stationSelector("🟢 2호선 · 신촌")).toEqual({ station: "신촌", line: "2호선" });
   });
 
-  test("대곡 is never treated as a same-platform GJ-Seohae transfer", () => {
-    expect(transferSeconds("대곡", "경의중앙선", "서해선")).toBe(180);
-    expect(directionalTransferOverride("대곡", "경의중앙선", "서해선", "곡산", "곡산")).toMatchObject({ seconds: 180, mode: "passage" });
+  test("GJ-Seohae shared corridor keeps station-by-station physical costs", () => {
+    expect(transferSeconds("능곡", "경의중앙선", "서해선")).toBe(180);
+    expect(transferOverride("대곡", "경의중앙선", "서해선")).toMatchObject({ seconds: 30, mode: "cross-platform" });
+    expect(transferOverride("일산", "경의중앙선", "서해선")).toMatchObject({ seconds: 15, mode: "same-platform" });
+    expect(directionalTransferOverride("대곡", "경의중앙선", "서해선", "곡산", "곡산")).toMatchObject({ seconds: 30, mode: "cross-platform" });
   });
 
-  test("shared-track same-direction transfer is zero but opposite direction is not", () => {
-    expect(directionalTransferOverride("초지", "4호선", "수인분당선", "안산", "안산")).toMatchObject({ seconds: 0, mode: "same-platform" });
-    expect(directionalTransferOverride("초지", "4호선", "수인분당선", "고잔", "안산")).toMatchObject({ seconds: 60, mode: "cross-platform" });
+  test("4-SuinBundang shared corridor is convenient but never an instant teleport", () => {
+    expect(directionalTransferOverride("한대앞", "4호선", "수인분당선", "중앙", "중앙")).toMatchObject({ seconds: 15, mode: "same-platform" });
+    expect(directionalTransferOverride("초지", "4호선", "수인분당선", "안산", "안산")).toMatchObject({ seconds: 15, mode: "same-platform" });
+    expect(directionalTransferOverride("초지", "4호선", "수인분당선", "고잔", "안산")).toMatchObject({ seconds: 90, mode: "passage" });
+    expect(transferOverride("안산", "4호선", "수인분당선")).toMatchObject({ seconds: 30, mode: "cross-platform" });
+    expect(transferOverride("오이도", "4호선", "수인분당선")).toMatchObject({ seconds: 30, mode: "cross-platform" });
   });
 
+  test("same-line branch and platform changes are never zero-second transfers", () => {
+    expect(transferSeconds("가좌", "경의중앙선", "경의중앙선")).toBe(220);
+    expect(transferSeconds("성수", "2호선", "2호선")).toBeGreaterThan(0);
+    expect(transferSeconds("신도림", "2호선", "2호선")).toBeGreaterThan(0);
+    expect(transferSeconds("구로", "1호선", "1호선")).toBeGreaterThan(0);
+    expect(transferSeconds("금천구청", "1호선", "1호선")).toBeGreaterThan(0);
+    expect(transferSeconds("병점", "1호선", "1호선")).toBe(90);
+  });
 
   test("rush-hour crowding applies only 06:50-09:30 and 16:50-19:30", () => {
     const estimate = (hour: number, minute: number) => transferLoadEstimate("서울역", new Date(Date.UTC(2026, 7, 20, hour, minute, 0)), 4).multiplier;

@@ -1,0 +1,26 @@
+station	from_line	to_line	distance_m	seconds	source
+서울역	GTX-A(북부)	4호선		450	upstream-V14.9.6
+서울역	GTX-A(북부)	공항철도		720	upstream-V14.9.6
+서울역	공항철도	GTX-A(북부)		720	upstream-V14.9.6
+석남	7호선	인천2호선		200	upstream-V14.9.6
+석남	인천2호선	7호선		280	upstream-V14.9.6
+성남	GTX-A(남부)	경강선		130	upstream-V14.9.6
+성남	경강선	GTX-A(남부)		130	upstream-V14.9.6
+수서	3호선	GTX-A(남부)		170	upstream-V14.9.6
+수서	GTX-A(남부)	3호선		170	upstream-V14.9.6
+수서	GTX-A(남부)	수인분당선		170	upstream-V14.9.6
+수서	수인분당선	GTX-A(남부)		170	upstream-V14.9.6
+신림	2호선	신림선		200	upstream-V14.9.6
+신림	신림선	2호선		200	upstream-V14.9.6
+신설동	1호선	우이신설선		130	upstream-V14.9.6
+신설동	2호선	우이신설선		230	upstream-V14.9.6
+연신내	3호선	GTX-A(북부)		440	upstream-V14.9.6
+연신내	6호선	GTX-A(북부)		250	upstream-V14.9.6
+연신내	GTX-A(북부)	3호선		440	upstream-V14.9.6
+연신내	GTX-A(북부)	6호선		250	upstream-V14.9.6
+서울역	경의중앙선	1호선		190	upstream-V14.9.6
+서울역	경의중앙선	4호선		290	upstream-V14.9.6
+서울역	경의중앙선	공항철도		680	upstream-V14.9.6
+서울역	경의중앙선	GTX-A(북부)		510	upstream-V14.9.6
+서울역	공항철도	경의중앙선		680	upstream-V14.9.6
+서울역	GTX-A(북부)	경의중앙선		510	upstream-V14.9.6

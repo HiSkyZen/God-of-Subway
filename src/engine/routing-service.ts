@@ -107,10 +107,7 @@ function pairBaseSeconds(station: string, fromLine: string, toLine: string, p?: 
   const override = transferOverride(station, fromLine, toLine);
   if (override) return override.seconds;
   const direct = p?.default_seconds ?? p?.distance_seconds;
-  if (typeof direct === "number" && Number.isFinite(direct)) {
-    const value = Math.max(0, Math.round(direct));
-    return value === 240 ? 247 : value;
-  }
+  if (typeof direct === "number" && Number.isFinite(direct)) return Math.max(0, Math.round(direct));
   const distanceM = typeof p?.distance_m === "number" ? p.distance_m : null;
   return modeledMissingTransferSeconds(distanceM, station, fromLine, toLine, stationLines(station).length);
 }
@@ -457,7 +454,7 @@ export function bestTransferDetail(station: string, from: SegmentInput, to: Segm
   const chosen = (both.length ? both : oneOutgoing.length ? oneOutgoing : oneIncoming.length ? oneIncoming : records)[0] ?? {};
   const matched = override ? "physical-layout-override" : both.length ? "direction" : oneOutgoing.length ? "outgoing" : oneIncoming.length ? "incoming" : p ? "pair" : "modeled";
   const rawChosen = chosen.seconds;
-  let baseSeconds = override?.seconds ?? (typeof rawChosen === "number" && Number.isFinite(rawChosen) ? rawChosen : pairBaseSeconds(station, from.line, to.line, p));
+  const baseSeconds = override?.seconds ?? (typeof rawChosen === "number" && Number.isFinite(rawChosen) ? rawChosen : pairBaseSeconds(station, from.line, to.line, p));
   const transferMode: TransferMode = override?.mode ?? (baseSeconds === 0 ? "same-platform" : p ? "passage" : "estimated");
   const adjusted = adjustedTransferSeconds(baseSeconds, station, at, stationLines(station).length, transferMode);
   const pos = (car: unknown, door: unknown): string => { const c = String(car ?? "").trim(); const d = String(door ?? "").trim(); return c && d ? `${c}-${d}` : c || d; };

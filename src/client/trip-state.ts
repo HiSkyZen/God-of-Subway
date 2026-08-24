@@ -46,7 +46,6 @@ export function remainingRouteRequest(trip: LiveTripState, now: Date): RouteRequ
   const startIndex = remainingRouteStartIndex(trip);
   return {
     start_time: trip.phase === "transfer" && trip.transferEndsAt ? trip.transferEndsAt : localDateTime(now.getTime()),
-    baseline_minutes: trip.baseline,
     day: trip.day,
     segments: trip.segments.slice(startIndex),
     refresh_only: false,
@@ -66,7 +65,6 @@ export function tripUpdatePayload(trip: LiveTripState): TripUpdateRequest {
     boarded_train_no: trip.boardedTrainNo,
     boarded_at: trip.boardedAt,
     day: trip.day,
-    baseline_minutes: trip.baseline,
   };
 }
 

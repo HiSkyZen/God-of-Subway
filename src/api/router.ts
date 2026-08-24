@@ -5,7 +5,12 @@ import type { EnginePort } from "./types";
 import { withSecurityHeaders } from "./security";
 
 export type AssetProvider = { index: () => Response | Promise<Response>; logo: () => Response | Promise<Response>; serviceWorker: () => Response | Promise<Response>; manifest: () => Response | Promise<Response>; icon: (name: "icon-192.png" | "icon-512.png" | "icon-maskable-512.png") => Response | Promise<Response>; frontend?: (name: string) => Response | Promise<Response>; };
-const notFound = (pathname: string): Response => { let decoded = pathname; try { decoded = decodeURIComponent(pathname); } catch {} if (/\/\.env(?:$|[./])/i.test(decoded) || /\.(?:py|ts|tsx|js)$/i.test(decoded) || decoded.includes("\\") || decoded.includes("..")) return withSecurityHeaders(new Response(null, { status: 404 })); return jsonResponse({ ok: false, error: "요청한 경로를 찾을 수 없습니다." }, 404); };
+const notFound = (pathname: string): Response => {
+  let decoded = pathname;
+  try { decoded = decodeURIComponent(pathname); } catch {}
+  if (/\/\.env(?:$|[./])/i.test(decoded) || /^\/data(?:\/|$)/i.test(decoded) || /\.(?:py|ts|tsx|js)$/i.test(decoded) || decoded.includes("\\") || decoded.includes("..")) return withSecurityHeaders(new Response(null, { status: 404 }));
+  return jsonResponse({ ok: false, error: "요청한 경로를 찾을 수 없습니다." }, 404);
+};
 const staticResponse = async (request: Request, provider: () => Response | Promise<Response>): Promise<Response> => { const response = withSecurityHeaders(await provider()); if (request.method === "HEAD") return new Response(null, { status: response.status, statusText: response.statusText, headers: response.headers }); return response; };
 
 export const createFetchHandler = (engine: EnginePort, assets: AssetProvider): ((request: Request) => Response | Promise<Response>) => async (request) => {

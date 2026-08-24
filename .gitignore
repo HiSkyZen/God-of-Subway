@@ -16,3 +16,7 @@ __pycache__/
 node_modules/
 dist/
 .vercel/
+data/*.sqlite
+data/*.sqlite-*
+data/*.db
+data/*.db-*

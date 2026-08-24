@@ -10,7 +10,7 @@ function twoSegmentTrip(): LiveTripState {
   return {
     activeIndex: 0, phase: "ride", boardedTrainNo: "2001", boardedAt: "2026-08-18 09:00:00",
     trackingStartedAt: "2026-08-18 09:00:00", platformStart: "2026-08-18 08:59:00", segments,
-    day: "AUTO", baseline: null, previousNextTrain: null, displaySegments: segments,
+    day: "AUTO", previousNextTrain: null, displaySegments: segments,
     transferEndsAt: null, journeyStartedAt: "2026-08-18 09:00:00",
   };
 }

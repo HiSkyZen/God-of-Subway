@@ -1,8 +1,6 @@
 export const STORAGE_KEYS = {
   favorites: "jigeumta_favorites_v1",
   liveTrip: "jigeumta_live_trip_v2",
-  experiments: "jigeumta_experiments_v1",
-  activeExperiment: "jigeumta_active_experiment_v1",
   pushEndpoint: "jigeumta_push_endpoint_v1",
   pushManagement: "jigeumta_push_management_v1",
   pushAlert: "jigeumta_push_alert_v1",

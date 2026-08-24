@@ -4,15 +4,21 @@ on:
   push:
   pull_request:
 
+permissions:
+  contents: read
+
 jobs:
   verify:
     runs-on: ubuntu-latest
+    env:
+      TRANSIT_DATA_MODE: fixture
     steps:
       - uses: actions/checkout@v6
       - uses: oven-sh/setup-bun@v2
         with:
           bun-version-file: .bun-version
       - run: bun install --frozen-lockfile
+      - run: bun run build:data
       - run: bun run check
       - run: bun run build:all
       - run: bun run verify:pwa

@@ -4,7 +4,6 @@ import type { AutoRouteResponse, LiveTripState, RouteSegment } from "./contract"
 import { useClock } from "./hooks";
 import { formatDuration, parseLocalDateTime } from "./pure";
 
-const GTX_EXCLUSIVE_STATIONS = new Set(["운정중앙", "킨텍스", "동탄"]);
 
 function clock(value?: string | null): string {
   if (!value) return "--:--";
@@ -95,7 +94,7 @@ export function UpstreamJourneyView({ result, segments, arrivalTime, totalSecond
   const from = first?.from || result.from || "출발역"; const to = last?.to || result.to || "도착역";
   const transferCount = result.transfer_count ?? Math.max(0, segments.length - 1);
   const hasGtx = segments.some((segment) => segment.line.startsWith("GTX-A"));
-  const canExcludeGtx = hasGtx && !GTX_EXCLUSIVE_STATIONS.has(from) && !GTX_EXCLUSIVE_STATIONS.has(to);
+  const canExcludeGtx = hasGtx;
   return <>
     <section className="route-overview" aria-live="polite">
       <div className="route-overview-main"><span className="route-kicker">추천 경로</span><h1><strong>{from}</strong><span>→</span><strong>{to}</strong></h1><p>환승 {transferCount}회 · 총 {formatDuration(totalSeconds)} · 신뢰도 {confidence(segments)}</p></div>

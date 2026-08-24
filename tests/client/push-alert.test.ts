@@ -6,7 +6,7 @@ const trip = (activeIndex: number, trainNo: string, boardedAt: string): LiveTrip
   activeIndex, phase: "ride", boardedTrainNo: trainNo, boardedAt,
   trackingStartedAt: "2026-08-18 09:00:00", platformStart: null,
   segments: [{ line: "2호선", from: "강남", to: "교대" }, { line: "3호선", from: "교대", to: "고속터미널" }],
-  day: "AUTO", baseline: null, previousNextTrain: null, displaySegments: [], transferEndsAt: null, journeyStartedAt: "2026-08-18 09:00:00",
+  day: "AUTO", previousNextTrain: null, displaySegments: [], transferEndsAt: null, journeyStartedAt: "2026-08-18 09:00:00",
 });
 
 describe("push trip alert snapshot", () => {

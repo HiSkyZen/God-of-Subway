@@ -1,23 +1,12 @@
 const vercel = await Bun.file("vercel.json").json() as { functions?: Record<string, { includeFiles?: string }> };
 const includeFiles = vercel.functions?.["api/index.ts"]?.includeFiles || "";
-const runtimeDataFiles = [
-  "schedule_weekday.json",
-  "schedule_holiday.json",
-  "stations.json",
-  "official_2to9_schedule.json",
-  "korail_extra_lines_schedule.json",
-  "sinbundang_schedule.json",
-  "kr_holidays_2026_2035.json",
-  "route_graph.json",
-  "transfer_data.json",
-  "urban_schedule.json",
-  "transfer_overlay.json",
+if (includeFiles !== "data/*.sqlite") throw new Error(`Vercel function runtime-data glob is stale: ${includeFiles || "<missing>"}`);
+if (!(await Bun.file("data/transit.sqlite").exists())) throw new Error("Vercel function runtime SQLite is missing: data/transit.sqlite");
+const legacyRuntimeJson = [
+  "schedule_weekday.json", "schedule_holiday.json", "stations.json", "official_2to9_schedule.json", "korail_extra_lines_schedule.json",
+  "sinbundang_schedule.json", "kr_holidays_2026_2035.json", "route_graph.json", "transfer_data.json", "urban_schedule.json", "transfer_overlay.json",
 ] as const;
-if (includeFiles !== "data/*.json") throw new Error(`Vercel function runtime-data glob is stale: ${includeFiles || "<missing>"}`);
-for (const required of runtimeDataFiles) {
-  const path = `data/${required}`;
-  if (!(await Bun.file(path).exists())) throw new Error(`Vercel function runtime data is missing: ${path}`);
-}
+for (const name of legacyRuntimeJson) if (await Bun.file(`data/${name}`).exists()) throw new Error(`Legacy runtime JSON must not remain: data/${name}`);
 
 Bun.env.PORT = "0";
 // The generated AOT bundle intentionally has no checked-in declaration file.
@@ -41,6 +30,11 @@ try {
     const response = await fetch(new URL(path, server.url));
     if (response.status !== status) throw new Error(`${path}: expected ${status}, got ${response.status}`);
     if (mime && !(response.headers.get("content-type") || "").includes(mime)) throw new Error(`${path}: unexpected MIME`);
+    if (path === "/api/health") {
+      const health = await response.clone().json() as Record<string, unknown>;
+      const sqlite = health.sqlite as Record<string, unknown> | undefined;
+      if (!sqlite || Number(sqlite.schema_version || 0) < 1 || Number(sqlite.trips || 0) < 1) throw new Error("Health endpoint must expose generated SQLite metadata");
+    }
     if (path === "/") {
       const html = await response.clone().text();
       const assets = [...html.matchAll(/(?:src|href)="([^"?]+)(?:\?[^\"]*)?"/g)].map((match) => match[1]).filter((value) => value.startsWith("/") || value.startsWith("../"));
@@ -60,13 +54,13 @@ try {
       if (!source.includes("jigeumta-shell-v18") || !source.includes("manifest.webmanifest")) throw new Error("Service worker shell cache contract is stale");
     }
   }
-  for (const path of ["/.env", "/.env.local", "/%2e%2e/.env", "/%2e%2e%5c.env", "/engine.py"]) {
+  for (const path of ["/.env", "/.env.local", "/%2e%2e/.env", "/%2e%2e%5c.env", "/engine.py", "/data/transit.sqlite"]) {
     for (const method of ["GET", "HEAD"]) {
       const response = await fetch(new URL(path, server.url), { method });
-      if (response.status !== 404 || (await response.text()) !== "") throw new Error(`Secret/source path exposed: ${method} ${path}`);
+      if (response.status !== 404 || (await response.text()) !== "") throw new Error(`Secret/source/runtime-data path exposed: ${method} ${path}`);
     }
   }
-  console.log("AOT HTTP, Vercel runtime-data, and PWA contracts verified");
+  console.log("AOT HTTP, Vercel SQLite runtime-data, and PWA contracts verified");
 } finally {
   server.stop(true);
 }

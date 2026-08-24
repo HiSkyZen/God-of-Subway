@@ -1,0 +1,14 @@
+{
+  "type": "transit_refresh_failure",
+  "fallback": "previous",
+  "pending_candidate": false,
+  "failed_timetable_units": [],
+  "timetable_retries": 10,
+  "build_concurrency": 96,
+  "http_concurrency": 96,
+  "http_timeout_ms": 30000,
+  "retry_delay_ms": 0,
+  "log_tail": [
+    "[build:data][transfer-diagnostic] {\"type\":\"missing_transfer_pairs\",\"count\":0,\"pairs\":[]}"
+  ]
+}
