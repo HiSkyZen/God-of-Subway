@@ -1,7 +1,6 @@
 import { Database } from "bun:sqlite";
 import type { TransitServiceDay } from "../../src/infra/transit-schema";
 import {
-  ALLOW_PARTIAL,
   BUILD_CONCURRENCY,
   API_DAYS,
   KRIC_BASE,
@@ -230,6 +229,7 @@ type StationResult = {
   rows: ApiRow[];
   endpoint: EndpointId | null;
   requests: number;
+  failed: boolean;
 };
 
 function endpointPath(id: EndpointId): string {
@@ -287,17 +287,22 @@ async function fetchStation(job: StationJob): Promise<StationResult> {
         day: job.day,
         dayCd: job.dayCd,
       }, job.ref);
-      if (rows.length) return { job, rows, endpoint, requests };
+      if (rows.length) return { job, rows, endpoint, requests, failed: false };
     } catch (error) {
       errors.push(`${endpoint}=${error instanceof Error ? error.name : "Error"}`);
     }
   }
-  if (errors.length === ordered.length && !ALLOW_PARTIAL) {
-    throw new Error(
-      `KRIC 시간표 요청 실패: ${job.source.source_id}/${job.ref.station.station_code}/${job.day}: ${errors.join("; ")}`,
-    );
+  const failed = errors.length === ordered.length;
+  if (failed) {
+    console.warn(`[build:data][kric-station-failure] ${JSON.stringify({
+      type: "kric_timetable_station_failure",
+      source_id: job.source.source_id,
+      station_code: job.ref.station.station_code,
+      day: job.day,
+      endpoints: errors,
+    })}`);
   }
-  return { job, rows: [], endpoint: null, requests };
+  return { job, rows: [], endpoint: null, requests, failed };
 }
 
 function eventFromRow(
@@ -365,17 +370,30 @@ function trustedTrainNumberExpress(line: string, trainNo: string): boolean {
   return line === "1호선" && /^K19\d{2}$/i.test(trainNo.trim());
 }
 
-function inferServiceKinds(events: Map<string, Event[]>): Map<string, "local" | "express" | "direct"> {
+function inferServiceKinds(
+  events: Map<string, Event[]>,
+  unavailableSequences: ReadonlyMap<string, ReadonlySet<number>> = new Map(),
+): Map<string, "local" | "express" | "direct"> {
   const kinds = new Map<string, "local" | "express" | "direct">();
   for (const [key, group] of events) {
-    const [line, , trainNo] = key.split("\u0001");
+    const [line, day, trainNo] = key.split("\u0001");
     if (line === "공항철도" && group.some((event) => serviceKind(event.rawKind) === "direct")) { kinds.set(key, "direct"); continue; }
     let express = trustedTrainNumberExpress(line, trainNo);
     const bySource = new Map<string, Event[]>();
     for (const event of group) bySource.set(event.sourceId, [...(bySource.get(event.sourceId) ?? []), event]);
-    for (const sourceEvents of bySource.values()) {
+    for (const [sourceId, sourceEvents] of bySource) {
       const seq = [...new Set(sourceEvents.map((event) => event.sequenceHint).filter(Number.isFinite))].sort((a, b) => a - b);
-      if (seq.some((value, index) => index > 0 && value - seq[index - 1] > 1)) { express = true; break; }
+      const unavailable = unavailableSequences.get(`${sourceId}\u0001${day}`);
+      const reliableGap = seq.some((value, index) => {
+        if (index === 0) return false;
+        const previous = seq[index - 1];
+        if (value - previous <= 1) return false;
+        for (let missing = previous + 1; missing < value; missing += 1) {
+          if (unavailable?.has(missing)) return false;
+        }
+        return true;
+      });
+      if (reliableGap) { express = true; break; }
     }
     kinds.set(key, express ? "express" : "local");
   }
@@ -455,7 +473,13 @@ export async function loadLiveTimetables(
 
   const stationJobs: StationJob[] = [];
   for (const plan of plans) {
-    if (!plan.endpoint) continue;
+    if (!plan.endpoint) {
+      console.warn(`[build:data][kric-endpoint-discovery-failure] ${JSON.stringify({
+        type: "kric_timetable_endpoint_discovery_failure",
+        source_id: plan.job.source.source_id,
+        day: plan.job.day,
+      })}`);
+    }
     const probedCodes = new Set(plan.probeRows.map((probe) => probe.ref.station.station_code));
     for (const ref of plan.job.stations) {
       if (probedCodes.has(ref.station.station_code)) continue;
@@ -464,7 +488,7 @@ export async function loadLiveTimetables(
         ref,
         day: plan.job.day,
         dayCd: plan.job.dayCd,
-        endpoint: plan.endpoint,
+        endpoint: plan.endpoint ?? "station",
       });
     }
   }
@@ -475,7 +499,16 @@ export async function loadLiveTimetables(
     fetchStation,
   );
   const stationRequests = stationResults.reduce((sum, result) => sum + result.requests, 0);
+  const unavailableSequences = new Map<string, Set<number>>();
   for (const result of stationResults) {
+    if (result.failed) {
+      for (const day of result.job.day === "END" ? (["END", "SAT"] as const) : ([result.job.day] as const)) {
+        const failureKey = `${result.job.source.source_id}\u0001${day}`;
+        const unavailable = unavailableSequences.get(failureKey) ?? new Set<number>();
+        unavailable.add(Number(result.job.ref.station.sequence_hint || 0));
+        unavailableSequences.set(failureKey, unavailable);
+      }
+    }
     const added = appendRows(
       events,
       result.job.source,
@@ -491,7 +524,7 @@ export async function loadLiveTimetables(
   metadata(db, "sat_schedule_source", `END(dayCd=9):${fallbackLines.join(",")}`);
   console.log(`[build:data] Saturday uses END(dayCd=9) for ${fallbackLines.length} supported lines; KRIC dayCd=7 requests=0`);
 
-  const inferredKinds = inferServiceKinds(events);
+  const inferredKinds = inferServiceKinds(events, unavailableSequences);
   db.transaction(() => {
     for (const [key, group] of events) {
       const [line, day, trainNo] = key.split("\u0001") as [
@@ -551,5 +584,6 @@ export async function loadLiveTimetables(
   );
   metadata(db, "kric_timetable_requests", discoveryRequests + stationRequests);
   metadata(db, "kric_timetable_concurrency", TIMETABLE_CONCURRENCY);
+  metadata(db, "kric_timetable_station_failures", stationResults.filter((result) => result.failed).length);
   return apiRows;
 }
