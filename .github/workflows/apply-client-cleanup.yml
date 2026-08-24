@@ -1,0 +1,40 @@
+name: Apply Client Cleanup
+
+on:
+  push:
+    branches:
+      - feat/sqlite-transit-data
+    paths:
+      - tools/apply-client-cleanup/READY
+
+permissions:
+  contents: write
+
+jobs:
+  apply:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: feat/sqlite-transit-data
+          fetch-depth: 0
+      - name: Reconstruct and verify patch
+        shell: bash
+        run: |
+          set -euo pipefail
+          cat tools/apply-client-cleanup/part-* | base64 --decode | gzip --decompress > /tmp/client-cleanup.patch
+          echo '41f011050b8aa113c74f35abf7d4496124f19acad329b0e538867ac72fc721b7  /tmp/client-cleanup.patch' | sha256sum --check --strict
+          git apply --check /tmp/client-cleanup.patch
+      - name: Apply validated client cleanup
+        shell: bash
+        run: |
+          set -euo pipefail
+          git apply /tmp/client-cleanup.patch
+          rm -rf tools/apply-client-cleanup tools/client-cleanup-patch
+          rm -f .github/workflows/apply-client-cleanup.yml
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add -A
+          git diff --cached --check
+          git commit -m 'feat(client): simplify routing controls and remove experiments'
+          git push origin HEAD:feat/sqlite-transit-data
