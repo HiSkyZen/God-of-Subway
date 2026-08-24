@@ -35,7 +35,7 @@ describe("GTX-A integrated automatic routing", () => {
 
   test("대곡 → 시청 stays routable when GTX competes with ordinary rail", async () => {
     const result = await calculateAutoRoute({ from: "대곡", to: "시청", day: "DAY", start_time: "2026-08-18 10:00:00" }, emptyRealtime);
-    expect(result.ok).toBe.true);
+    expect(result.ok).toBe(true);
     expect((result.segments as Array<Record<string, unknown>>).at(-1)?.to).toBe("시청");
   });
 
@@ -57,7 +57,7 @@ describe("GTX-A integrated automatic routing", () => {
 
   test("킨텍스 → 용산 works from the GTX-exclusive origin using timetable candidates", async () => {
     const result = await calculateAutoRoute({ from: "킨텍스", to: "용산", day: "DAY", start_time: "2026-08-18 10:00:00" }, emptyRealtime);
-    expect(result.ok).toBe.true);
+    expect(result.ok).toBe(true);
     const segments = result.segments as Array<Record<string, unknown>>;
     expect(segments[0]).toMatchObject({ line: "GTX-A(북부)", from: "킨텍스" });
     expect(String(segments[0]?.train_no || "")).toMatch(/^X1\d{3}$/);
