@@ -48,6 +48,7 @@ export interface DataRepository {
   readonly data: EngineData;
   reload(): void;
   loadedDatasets(): DatasetKey[];
+  stationCoordinates(line: string, station: string): { latitude: number; longitude: number } | null;
   validate(): { files: string[]; stationLines: number; graphModes: string[]; stations: number; trips: number; stopTimes: number; transfers: number; schemaVersion: number; buildMode: string };
 }
 
@@ -120,6 +121,18 @@ export class SqliteDataRepository implements DataRepository {
     return { pairs };
   }
   private metadata(): Record<string, string> { return Object.fromEntries((this.db().query(`SELECT key,value FROM metadata`).all() as Array<{ key: string; value: string }>).map((row) => [row.key, row.value])); }
+  stationCoordinates(line: string, station: string): { latitude: number; longitude: number } | null {
+    const row = this.db().query(`
+      SELECT s.latitude,s.longitude
+      FROM station s
+      JOIN station_source ss ON ss.station_id=s.station_id
+      JOIN source_registry sr ON sr.source_id=ss.source_id
+      WHERE sr.logical_line=? AND s.canonical_name=?
+        AND s.latitude IS NOT NULL AND s.longitude IS NOT NULL
+      ORDER BY s.station_id LIMIT 1
+    `).get(line, station) as { latitude: number; longitude: number } | null;
+    return row ? { latitude: Number(row.latitude), longitude: Number(row.longitude) } : null;
+  }
   reload(): void { this.cache.clear(); if (this.dbHandle) { this.dbHandle.close(); this.dbHandle = null; } }
   loadedDatasets(): DatasetKey[] { return [...this.cache.keys()].sort(); }
   validate(): { files: string[]; stationLines: number; graphModes: string[]; stations: number; trips: number; stopTimes: number; transfers: number; schemaVersion: number; buildMode: string } {

@@ -2,6 +2,7 @@
 
 export type ServiceMode = "DAY" | "SAT" | "END" | "AUTO";
 export type ResolvedMode = "DAY" | "SAT" | "END";
+export type RouteObjective = "fastest" | "fewest_transfers" | "lowest_cost";
 export type LineName =
   | "1호선" | "2호선" | "3호선" | "4호선" | "5호선" | "6호선" | "7호선" | "8호선" | "9호선"
   | "경의중앙선" | "수인분당선" | "경춘선" | "경강선" | "서해선" | "공항철도" | "신분당선"
@@ -30,7 +31,7 @@ export interface Diagnostics { positions: number; matched: number; unmatched_tra
 export interface PositionCacheEntry { rows: PositionRow[]; error: string; available: boolean; query?: string; cache_state?: string; }
 export type PositionCache = Map<string, PositionCacheEntry | PositionRow[]> | Record<string, PositionCacheEntry | PositionRow[]>;
 export interface CalculateRoutePayload { start_time?: string; day?: string; segments: SegmentInput[]; refresh_only?: boolean; baseline_minutes?: number | string | null; train_delay_cache?: unknown[]; [key: string]: unknown; }
-export interface AutoRoutePayload { from: string; to: string; start_time?: string; day?: string; [key: string]: unknown; }
+export interface AutoRoutePayload { from: string; to: string; start_time?: string; day?: string; objective?: RouteObjective; use_gtx?: boolean; exclude_gtx?: boolean; [key: string]: unknown; }
 export interface LiveTripPayload { segments: SegmentInput[]; active_index?: number; boarded_train_no?: string; boarded_at?: string; day?: string; [key: string]: unknown; }
 export interface RealtimeResult { ok: boolean; error?: { message?: string } | string | null; data?: RealtimeEnvelope; }
 export interface RealtimeEnvelope { RESULT?: { code?: string; message?: string }; realtimePositionList?: PositionRow[]; _jigeumta_query?: string; [key: string]: unknown; }
