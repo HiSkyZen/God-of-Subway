@@ -1,66 +1,47 @@
-# SQLite 철도 데이터 아키텍처
+# SQLite Transit Data
 
-## 목표
+## 런타임 계약
 
-정적 시간표·노선 그래프·환승 JSON을 런타임 의존성에서 제거하고, 검토 가능한 TSV와 KRIC OpenAPI를 바탕으로 `data/transit.sqlite`를 생성합니다. 서울 열린데이터광장 실시간 위치 API와 KRIC 환승거리 런타임 조회는 정적 DB와 분리합니다.
+런타임 정적 교통 데이터의 단일 source of truth는 `data/transit.sqlite`입니다. JSON/CSV 시간표를 runtime에서 읽지 않습니다.
 
-## 시간표 빌드
+주요 테이블은 `source_registry`, `station`, `station_source`, `trip`, `trip_source`, `stop_time`, `ride_edge`, `transfer_pair`, `transfer_detail`, `transfer_location_hint`, `holiday`, `metadata`, `build_source`입니다.
 
-KRIC 공식 요일 코드는 다음과 같습니다.
+## 시간표 수집
 
-```text
-DAY = 8   # 평일
-SAT = 7   # 토요일
-END = 9   # 휴일
+Production daily builder는 KRIC 시간표를 최우선으로 사용합니다.
+- 평일: `dayCd=8`
+- 주말·공휴일: `dayCd=9`
+- SAT row는 END(dayCd=9)를 복제
+- `dayCd=7` 요청 없음
+
+지원역 전체를 대상으로 endpoint를 탐색한 뒤 fan-out합니다. KRIC에서 특정 source를 얻지 못한 경우에만 보유한 fallback timetable을 사용할 수 있습니다.
+
+KRIC 급행 표시는 보조정보입니다. 서비스 종류는 검증된 열번, 중간역 skip, 추월 관계 같은 구조적 timetable 증거로 보완합니다. 종착/분기 때문에 뒤 역이 없는 열차를 급행으로 오판하지 않아야 합니다. 공항철도 직통은 DB 생성에서 제외합니다.
+
+## 환승
+
+시간/거리: 서울교통공사 → upstream fallback. KRIC 거리나 좌표로 환승시간을 계산하지 않습니다.
+
+위치: 서울 상세 → MOLIT 빠른환승 → upstream → KRIC/KR 정적 위치 → KRIC live raw 위치 hint.
+
+각 물리역의 서로 다른 노선쌍은 nC2로 검증합니다. 그래도 없는 pair는 non-fatal JSON diagnostic과 보수적 topology fallback으로 남깁니다.
+
+## 운임 좌표
+
+MOLIT 역사 좌표 snapshot은 `station.latitude/longitude`에 적재되며 **예상 운임거리**에만 사용합니다. 플랫폼 보행거리나 환승시간에는 사용하지 않습니다.
+
+## 생성/검증
+
+개발/CI fixture:
+```bash
+TRANSIT_DATA_MODE=fixture bun run build:data
+bun run doctor
+bun run audit:transfers
 ```
 
-live 빌드는 운영기관/노선/요일별 대표 역에서 먼저 endpoint를 probe합니다.
-
-1. `trainUseInfo/subwayTimetableExp`
-2. `trainUseInfo/subwayTimetable`
-3. `convenientInfo/stationTimetable`
-
-작동하는 endpoint를 source/day마다 한 번 결정한 뒤 해당 endpoint로 역별 fan-out을 수행합니다. 따라서 지원되지 않는 endpoint를 모든 역에서 반복 재시도하지 않습니다. 기본 동시성은 live timetable build에서 16이며 `TRANSIT_BUILD_CONCURRENCY`로 조정할 수 있습니다.
-
-KRIC가 `dayCd=7`에 대해 모든 대표 source에서 빈 응답을 돌려주는 경우 수백 건의 SAT 요청을 계속하지 않습니다. SAT fan-out을 중단하고 해당 논리 노선에 대해 END 시간표를 명시적 fallback으로 복제하며 `metadata.sat_schedule_fallback`에 기록합니다. 이는 upstream KRIC SAT 데이터가 비어 있는 경우에만 작동하는 fail-safe입니다.
-
-CI는 `TRANSIT_DATA_MODE=fixture`로 동일 스키마를 외부 API 없이 검증합니다.
-
-## 환승 데이터: build-time 토폴로지, runtime 거리
-
-제공된 서울교통공사 2025-12-31 환승거리/시간은 build-time authoritative source입니다.
-
-KRIC `convenientInfo/stationTransferInfo`는 **배포 시 전수 호출하지 않습니다**. 각 물리 `station_id`에 연결된 논리 노선이 `n`개라면 `n*(n-1)/2`개의 unordered transfer pair를 생성하고, 서울교통공사에 없는 directed row를 `runtime-kric-pending`으로 저장합니다.
-
-실제 경로 후보가 이 pending pair를 사용할 때만 KRIC를 조회합니다. 응답의 `chtnLn`으로 대상 노선을 구분하고 `chtnDst`를 pair별로 선택한 뒤 다음 산식을 적용합니다.
-
-```text
-seconds = round(chtnDst_m / 1.2)
+수동 live:
+```bash
+KRIC_API_KEY=... TRANSIT_DATA_MODE=live bun run build:data
 ```
 
-결과는 pair 단위로 Valkey/메모리에 캐시합니다. 한 환승역의 여러 노선쌍을 하나의 거리로 축약하지 않습니다.
-
-## SQLite 정규형
-
-- `source_registry`: 운영기관/노선 코드와 논리 노선
-- `station`, `station_source`: 물리 역사와 각 데이터 소스 역사 코드
-- `trip`, `trip_source`, `stop_time`: DAY/SAT/END 열차/정차시각
-- `ride_edge`: 시간표에서 집계한 인접역 운행시간
-- `transfer_pair`: authoritative transfer 또는 runtime KRIC pending pair
-- `transfer_detail`: 방향별 빠른 환승 위치
-- `holiday`: 운행일 판정
-- `metadata`, `build_source`: provenance와 build diagnostics
-
-## 공항철도 직통
-
-공항철도 직통열차는 수도권 전철 급행으로 취급하지 않으며 생성 DB에서 제외합니다. 공항철도 일반열차만 경로 계산에 사용합니다.
-
-## Vercel
-
-Function bundle에는 `data/*.sqlite`만 내부 파일로 포함합니다. immutable deployment filesystem에서 SQLite를 직접 열지 않고 cold start 시 `/tmp`로 복사한 뒤 read-only로 엽니다.
-
-Preview에 KRIC 키가 없으면 fixture DB를 생성할 수 있습니다. KRIC 키가 제공된 live Preview/Production은 위 최적화된 timetable builder를 사용합니다. 환승거리 KRIC 호출은 live build 시간에 포함되지 않습니다.
-
-## 시크릿
-
-`SEOUL_API_KEY`, `KRIC_API_KEY`는 환경변수에서만 읽습니다. 키 값이나 키가 포함된 URL을 로그, DB metadata, TSV, PR 본문에 저장하지 않습니다.
+생성은 temporary SQLite에 수행한 뒤 integrity/FK/coverage 검증을 통과해야 기존 DB를 교체합니다. Production deployment 자체는 `build:data`를 실행하지 않습니다.
