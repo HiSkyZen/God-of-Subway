@@ -1,6 +1,6 @@
 name: Transit Data Update
 
-# Secret-enabled live verification marker: 2026-08-24.
+# Secret-enabled live verification marker: 2026-08-24T06:33Z.
 on:
   schedule:
     # 03:00 Asia/Seoul = 18:00 UTC on the previous date.
@@ -31,7 +31,7 @@ jobs:
       TRANSIT_DATA_MODE: live
       TRANSIT_BUILD_CONCURRENCY: "16"
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
         with:
           ref: ${{ github.ref_name }}
           fetch-depth: 0
