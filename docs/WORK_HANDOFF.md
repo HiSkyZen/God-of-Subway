@@ -25,20 +25,16 @@
 
 ## 미완료 작업
 
-1. **Daily live DB 실운영 검증 — 외부 blocker 가능**
-   - 03:00 KST workflow, deploy-time `build:data` 제거, runtime KRIC-distance 제거까지 구현/CI green.
-   - 아직 `data: refresh KRIC transit SQLite` bot commit이 확인되지 않음.
-   - repository Actions secret `KRIC_API_KEY` 설정 여부를 확인해야 함. 사용 가능한 도구로 secret을 설정할 수 없으면 이 blocker를 PR known limitation에 명시.
+1. **Daily live DB 실운영 검증**
+   - Repository Actions secret `KRIC_API_KEY`는 설정됨.
+   - 03:00 KST workflow, deploy-time `build:data` 제거, runtime KRIC-distance 제거까지 구현됨.
+   - bounded live refresh가 `data/transit.sqlite`를 실제 commit하는지 확인.
+   - live KRIC 실패 시 첫 실행은 validated fixture SQLite를 bootstrap하고, 이후 실행은 last-known-good SQLite를 보존해야 함.
+   - 실패 로그는 secret을 포함하지 않는 JSON 진단만 저장.
 
-2. **최종 regression 보강**
-   - 운정중앙→동탄: 수서 환승이 신사→판교→성남 우회와 ETA가 같거나 빠르면 수서 경로가 선택되는지.
-   - same-line branch: 가좌, 성수, 신도림, 구로, 금천구청, 병점.
-   - 급행 추론: 추월/skip은 급행, 종착·분기는 급행으로 오판하지 않음.
-   - 기존 shared-track regression 유지.
-
-3. **최종 검증/PR 정리**
-   - fixture build + doctor + audit + full Bun tests + server/client build + PWA + AOT.
+2. **최종 검증/PR 정리**
    - latest GitHub Bun CI와 Vercel success 확인.
+   - `data/transit.sqlite` 존재 및 daily refresh 동작 확인.
    - PR #7 body를 WIP에서 최종 architecture/source precedence/fallback/test/known limitation으로 교체.
    - Draft 유지.
 
