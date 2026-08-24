@@ -31,6 +31,15 @@ describe("transit routing overhaul", () => {
     expect(transferOverride("오이도", "4호선", "수인분당선")).toMatchObject({ seconds: 30, mode: "cross-platform" });
   });
 
+  test("same-line branch and platform changes are never zero-second transfers", () => {
+    expect(transferSeconds("가좌", "경의중앙선", "경의중앙선")).toBe(220);
+    expect(transferSeconds("성수", "2호선", "2호선")).toBeGreaterThan(0);
+    expect(transferSeconds("신도림", "2호선", "2호선")).toBeGreaterThan(0);
+    expect(transferSeconds("구로", "1호선", "1호선")).toBeGreaterThan(0);
+    expect(transferSeconds("금천구청", "1호선", "1호선")).toBeGreaterThan(0);
+    expect(transferSeconds("병점", "1호선", "1호선")).toBe(90);
+  });
+
   test("rush-hour crowding applies only 06:50-09:30 and 16:50-19:30", () => {
     const estimate = (hour: number, minute: number) => transferLoadEstimate("서울역", new Date(Date.UTC(2026, 7, 20, hour, minute, 0)), 4).multiplier;
     expect(estimate(6, 49)).toBe(1);
