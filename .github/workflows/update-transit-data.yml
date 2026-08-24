@@ -1,5 +1,6 @@
 name: Transit Data Update
 
+# Secret-enabled live verification marker: 2026-08-24.
 on:
   schedule:
     # 03:00 Asia/Seoul = 18:00 UTC on the previous date.
