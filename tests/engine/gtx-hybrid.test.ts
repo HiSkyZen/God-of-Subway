@@ -90,6 +90,16 @@ describe("GTX-A integrated automatic routing", () => {
     expect(String(last?.train_no || "")).toMatch(/^X0\d{3}$/);
   });
 
+  test("운정중앙 → 동탄 fastest route prefers the Suseo connection over the Shinsa-Pangyo detour", async () => {
+    const result = await calculateAutoRoute({ from: "운정중앙", to: "동탄", day: "DAY", objective: "fastest", start_time: "2026-08-18 10:00:00" }, gtxRealtime);
+    expect(result.ok).toBe(true);
+    const segments = result.segments as Array<Record<string, unknown>>;
+    const stations = segments.flatMap((segment) => [String(segment.from ?? ""), String(segment.to ?? "")]);
+    expect(stations).toContain("수서");
+    expect(stations.includes("신사") && stations.includes("판교")).toBe(false);
+    expect(segments.at(-1)).toMatchObject({ line: "GTX-A(남부)", to: "동탄" });
+  });
+
   test("exclude_gtx reruns through the ordinary network", async () => {
     const result = await calculateAutoRoute({ from: "연신내", to: "서울역", day: "DAY", start_time: "2026-08-18 10:00:00", exclude_gtx: true }, gtxRealtime);
     expect(result.ok).toBe(true);
