@@ -6,7 +6,7 @@
 - Draft PR: **#7** — `feat(data): build transit datasets into SQLite`
 - Base: `dev/ts-bun`
 - Head branch: `feat/sqlite-transit-data`
-- 현재 확인된 원격 head: `e53dbf0cf51b2c04c81997d44e5af9faef90aa30`
+- 현재 확인된 원격 head: `8660898127a9117676c04537c9f49af364773170`
 - PR은 open / draft / mergeable=true 상태.
 - Vercel status는 현재 head에서 success.
 - 임시 `Source Snapshot` workflow가 아직 존재하며 최종 정리 시 삭제해야 함.
@@ -91,9 +91,7 @@ KRIC `exptCd`는 신뢰 가능한 노선이 적으므로 보조정보.
 공항철도 직통은 급행이 아니라 완전히 제외.
 
 ### GTX-A — 남은 항목
-1. GTX 토글 기본값 ON으로 UI에 연결.
-2. 동탄 등 GTX 전용 목적지에서도 토글 UI를 표시.
-3. 운정→동탄 실제 회귀테스트에서 수서 환승이 신사→판교→성남 우회와 ETA가 같거나 빠르면 수서 경로가 선택되는지 검증. 하드코딩된 수서 bonus 금지.
+1. 운정→동탄 실제 회귀테스트에서 수서 환승이 신사→판교→성남 우회와 ETA가 같거나 빠르면 수서 경로가 선택되는지 검증. 하드코딩된 수서 bonus 금지.
 
 ### 운임
 공식 수도권 통합요금 기준을 사용:
@@ -104,26 +102,9 @@ KRIC `exptCd`는 신뢰 가능한 노선이 적으므로 보조정보.
 - 역사 좌표는 운임거리 근사에만 사용.
 - 환승시간 추산에는 좌표 사용 금지.
 
-### UI/설정
-1. 시간 컨트롤 아래 새 행:
-   - 최단시간
-   - 최소환승
-   - 최소비용
-2. 기본은 최단시간.
-3. 설정에는 오직:
-   - 운행일: 평일 / 주말·공휴일
-   - 디버그모드 조회
-   - GTX 이용 토글 (기본 ON)
-4. AUTO/SAT/END 세분화 UI 제거. 내부 DB는 DAY/SAT/END를 가질 수 있으나 사용자 선택은 2개.
-5. 기말시험 관련 기능/문구/localStorage/ExperimentRecord/export 전부 삭제.
-6. Google Analytics/gtag/GTM/CSP 허용 전부 삭제.
-7. 기존 앱 예상 총시간/baseline 비교 전부 삭제.
-8. 검색 버튼과 메인 안내 메시지 영역에 dark mode에서도 보이는 외곽선 추가.
-9. GTX 전용 목적지에서도 GTX 토글 표시.
-
 ## 2. 원격에 이미 반영된 핵심 커밋
 
-확인된 원격 PR head는 `e53dbf0cf51b2c04c81997d44e5af9faef90aa30`.
+확인된 원격 PR head는 `8660898127a9117676c04537c9f49af364773170`.
 
 직전 작업에서 사용자에게 보고된 단계 커밋:
 - `07316492` — KRIC timetable / transfer pipeline 방향
@@ -131,6 +112,7 @@ KRIC `exptCd`는 신뢰 가능한 노선이 적으므로 보조정보.
 - `011fda6f` — shared-track/fewest-transfer 후보 확장, auto route 연결
 - `95a91f8` — schema v2/KRIC location-only 정책에 맞춘 doctor/audit/fixture CI 계약 (`Bun CI #467` green)
 - `3fcade7` + `e53dbf0` — 예상 운임·3개 목적함수·GTX preference 및 회귀테스트 (`Bun CI #471` green)
+- `8660898` — 3개 경로 목적 UI, 평일/주말·공휴일·디버그·GTX 설정 단순화, Analytics/Experiment/baseline 제거, dark-mode border
 
 반드시 `git log` / GitHub PR diff로 실재 내용 확인 후 이어갈 것. 이전 에이전트 보고를 맹신하지 말 것.
 
@@ -141,11 +123,10 @@ KRIC `exptCd`는 신뢰 가능한 노선이 적으므로 보조정보.
 
 따라서 다음처럼 진행:
 1. 정규화 dataset + station coordinates → DB fixture 검증 → commit → push
-2. UI/설정/analytics/experiment/baseline 제거 → client tests/build → commit → push
-3. daily KRIC 03:00 + deploy-time build 제거 → workflow/verify → commit → push
-4. docs/legacy cleanup/source-snapshot 삭제 → full CI → commit → push
-5. 최종 regression fixes → commit/push
-6. PR body를 WIP 문구에서 실제 구현/검증 결과로 갱신. Draft 해제는 사용자 요청 없으면 하지 말 것.
+2. daily KRIC 03:00 실제 live DB 성공 확인 + deploy-time build 제거 → workflow/verify → commit → push
+3. docs/legacy cleanup/source-snapshot 삭제 → full CI → commit → push
+4. 최종 regression fixes → commit/push
+5. PR body를 WIP 문구에서 실제 구현/검증 결과로 갱신. Draft 해제는 사용자 요청 없으면 하지 말 것.
 
 각 push 후:
 - PR head SHA 확인
@@ -178,11 +159,6 @@ rg -n "Experiment|experiment|기말|baseline|baseline_minutes|analytics|gtag|goo
 ```
 
 최종적으로 제품 코드/문서에 남아선 안 되는 것:
-- `src/client/analytics.ts`
-- Google Analytics 초기화/이벤트/CSP
-- Experiment panel/storage/export
-- 기말시험 localStorage key
-- baseline ETA UI/API payload/type
 - runtime KRIC transfer distance enrichment service
 - deploy-time KRIC DB generation 설명
 
@@ -277,7 +253,6 @@ Cloudflare Workers cron을 택하면 GitHub에 SQLite push가 어려운 구조�
 - no runtime KRIC transfer-distance
 - SAT uses dayCd=9
 - no AREX direct
-- no analytics/experiment/baseline remnants
 - 3 route objectives end-to-end UI/API/engine 동작
 - GTX toggle semantics regression green
 - shared-track / same-line branch regression green
