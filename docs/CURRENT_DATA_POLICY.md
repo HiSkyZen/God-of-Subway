@@ -1,3 +1,0 @@
-# Current transit data policy
-
-This temporary consolidation note exists only while PR #7 is being finalized. Runtime static transit data is SQLite-only. KRIC timetable is primary (`dayCd=8` weekday, `dayCd=9` weekend/holiday, SAT=END); AREX direct is excluded. Transfer time uses Seoul Metro authoritative data first and upstream fallback second. KRIC transfer distance and station coordinates are never used to infer transfer duration. KRIC transfer APIs contribute only low-priority raw location hints. Station coordinates are for estimated fare distance only. The database is refreshed by the 03:00 KST scheduled workflow; deployment does not run `build:data`.
