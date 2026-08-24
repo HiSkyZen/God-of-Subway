@@ -11,7 +11,7 @@
     "build:data:fixture": "TRANSIT_DATA_MODE=fixture bun run scripts/build-transit-db.ts",
     "build": "bun run scripts/clean-dist.ts && bun build --target=bun --production --outdir=dist/server ./src/server.ts",
     "build:client": "bun build --target=browser --production ./src/client/sw.ts --outfile=dist/public/sw.js && bun run scripts/copy-pwa-assets.ts",
-    "build:all": "bun run build:data && bun run build && bun run build:client && bun run scripts/promote-static.ts",
+    "build:all": "bun run build && bun run build:client && bun run scripts/promote-static.ts",
     "verify:pwa": "bun run scripts/verify-pwa-assets.ts",
     "verify:aot": "bun run scripts/verify-aot.ts",
     "generate:vapid": "bun run scripts/generate-vapid.ts",

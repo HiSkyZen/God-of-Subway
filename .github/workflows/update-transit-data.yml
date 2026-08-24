@@ -10,6 +10,9 @@ on:
       - feat/sqlite-transit-data
     paths:
       - .github/workflows/update-transit-data.yml
+      - scripts/transit-build/**
+      - scripts/build-transit-db.ts
+      - datasets/**
 
 permissions:
   contents: write
@@ -59,6 +62,8 @@ jobs:
       - name: Commit only a validated changed database
         shell: bash
         run: |
+          # A failed build/validation never reaches this step, so the last known-good
+          # repository SQLite remains untouched.
           git add -f data/transit.sqlite
           if git diff --cached --quiet -- data/transit.sqlite; then
             echo "transit.sqlite is unchanged"
