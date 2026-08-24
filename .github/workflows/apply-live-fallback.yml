@@ -1,0 +1,561 @@
+name: Apply bounded KRIC fallback patch
+
+on:
+  push:
+    branches: [feat/sqlite-transit-data]
+    paths: [.github/workflows/apply-live-fallback.yml]
+
+permissions:
+  contents: write
+
+jobs:
+  apply:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: feat/sqlite-transit-data
+          fetch-depth: 0
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.3.14
+
+      - name: Patch KRIC endpoint discovery and live builder
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+
+          p = Path('scripts/transit-build/timetable.ts')
+          s = p.read_text()
+          old = '  const probes = job.stations.slice(0, Math.min(2, job.stations.length));'
+          new = '''  const probeIndexes = [Math.floor(job.stations.length / 2), 0, job.stations.length - 1];
+            const probes = [...new Set(probeIndexes)]
+              .filter((index) => index >= 0 && index < job.stations.length)
+              .map((index) => job.stations[index]);'''
+          assert old in s
+          s = s.replace(old, new)
+          old = '        const rows = await requestRows(endpoint.id, job, ref, 0);'
+          assert old in s
+          s = s.replace(old, '        const rows = await requestRows(endpoint.id, job, ref, 1);')
+          old = '''    if (!plan.endpoint) {
+                console.warn(`[build:data][kric-endpoint-discovery-failure] ${JSON.stringify({
+                  type: "kric_timetable_endpoint_discovery_failure",
+                  source_id: plan.job.source.source_id,
+                  day: plan.job.day,
+                })}`);
+              }
+              const probedCodes = new Set(plan.probeRows.map((probe) => probe.ref.station.station_code));'''
+          new = '''    if (!plan.endpoint) {
+                console.warn(`[build:data][kric-endpoint-discovery-failure] ${JSON.stringify({
+                  type: "kric_timetable_endpoint_discovery_failure",
+                  source_id: plan.job.source.source_id,
+                  day: plan.job.day,
+                })}`);
+                continue;
+              }
+              const probedCodes = new Set(plan.probeRows.map((probe) => probe.ref.station.station_code));'''
+          assert old in s
+          s = s.replace(old, new)
+          old = '        endpoint: plan.endpoint ?? "station",'
+          assert old in s
+          s = s.replace(old, '        endpoint: plan.endpoint,')
+          p.write_text(s)
+
+          p = Path('scripts/build-transit-db.ts')
+          s = p.read_text()
+          old = 'import { deriveRideEdges, loadLiveTimetables } from "./transit-build/timetable";'
+          new = old + '\nimport { loadMissingDefaultTimetables } from "./transit-build/timetable-fallback";'
+          assert old in s
+          s = s.replace(old, new)
+          old = '''  } else {
+              await loadLiveTimetables(db, sources, stations);
+              const hints = await loadKricTransferLocationHints(db, sources, stations);'''
+          new = '''  } else {
+              await loadLiveTimetables(db, sources, stations);
+              loadMissingDefaultTimetables(db, sources, stations);
+              const hints = await loadKricTransferLocationHints(db, sources, stations);'''
+          assert old in s
+          s = s.replace(old, new)
+          p.write_text(s)
+          PY
+
+          cat > scripts/transit-build/timetable-fallback.ts <<'TS'
+          import { Database } from "bun:sqlite";
+          import type { TransitServiceDay } from "../../src/infra/transit-schema";
+          import {
+            buildSource,
+            cleanName,
+            metadata,
+            type Event,
+            type SourceRow,
+            type StationRow,
+          } from "./common";
+          import { insertTrip } from "./timetable";
+
+          interface PathStation extends StationRow { stationId: number; }
+          export interface TimetableFallbackTarget {
+            sourceId: string;
+            line: string;
+            day: "DAY" | "END";
+          }
+          export interface TimetableFallbackStats {
+            targets: TimetableFallbackTarget[];
+            generatedTrips: number;
+            saturdayTrips: number;
+          }
+
+          function sourceTripCount(db: Database, sourceId: string, day: TransitServiceDay): number {
+            return Number((db.query(`
+              SELECT COUNT(DISTINCT t.trip_id) AS n
+              FROM trip t
+              JOIN trip_source ts ON ts.trip_id=t.trip_id
+              WHERE ts.source_id=? AND t.service_day=?
+            `).get(sourceId, day) as { n: number } | null)?.n ?? 0);
+          }
+
+          function sourcePath(db: Database, source: SourceRow, stations: StationRow[]): PathStation[] {
+            return stations
+              .filter((station) => station.source_id === source.source_id)
+              .sort((a, b) => Number(a.sequence_hint) - Number(b.sequence_hint))
+              .map((station) => {
+                const row = db.query(`
+                  SELECT station_id FROM station_source
+                  WHERE source_id=? AND station_code=?
+                `).get(source.source_id, station.station_code) as { station_id: number } | null;
+                return row ? { ...station, stationId: Number(row.station_id) } : null;
+              })
+              .filter((station): station is PathStation => station !== null);
+          }
+
+          function fallbackEvents(
+            source: SourceRow,
+            path: PathStation[],
+            day: "DAY" | "END",
+            trainNo: string,
+            start: number,
+            reverse: boolean,
+          ): Event[] {
+            const ordered = reverse ? [...path].reverse() : path;
+            return ordered.map((station, index) => {
+              const sec = start + index * 90;
+              return {
+                sourceId: source.source_id,
+                line: source.logical_line,
+                day,
+                trainNo,
+                stationId: station.stationId,
+                stationCode: station.station_code,
+                station: cleanName(station.canonical_name),
+                arrival: index === 0 ? null : sec,
+                departure: index === ordered.length - 1 ? null : sec + 20,
+                sequenceHint: Number(station.sequence_hint || 0),
+                rawKind: "local",
+              };
+            });
+          }
+
+          function generateSourceDay(
+            db: Database,
+            source: SourceRow,
+            path: PathStation[],
+            day: "DAY" | "END",
+          ): number {
+            const prefix = source.source_id.replace(/[^A-Za-z0-9]/g, "");
+            let trips = 0;
+            for (let index = 0; index < 24; index += 1) {
+              const reverse = index % 2 === 1;
+              const start = 5 * 3600 + 30 * 60 + index * 45 * 60;
+              const trainNo = `FB-${prefix}-${day}-${String(index + 1).padStart(3, "0")}`;
+              const events = fallbackEvents(source, path, day, trainNo, start, reverse);
+              insertTrip(
+                db,
+                source.logical_line,
+                day,
+                trainNo,
+                reverse ? "UP" : "DOWN",
+                "local",
+                [source.source_id],
+                events,
+              );
+              trips += 1;
+            }
+            return trips;
+          }
+
+          /** Rebuild SAT as an exact database-level clone of END(dayCd=9). */
+          export function synchronizeSaturdayFromEnd(db: Database): number {
+            const endTrips = db.query(`
+              SELECT trip_id,logical_line,train_no,direction,service_kind,service_priority,
+                     origin_station_id,destination_station_id
+              FROM trip WHERE service_day='END' ORDER BY trip_id
+            `).all() as Array<{
+              trip_id: number;
+              logical_line: string;
+              train_no: string;
+              direction: string;
+              service_kind: string;
+              service_priority: number;
+              origin_station_id: number | null;
+              destination_station_id: number | null;
+            }>;
+            const sources = db.prepare(`SELECT source_id FROM trip_source WHERE trip_id=? ORDER BY source_id`);
+            const stops = db.prepare(`
+              SELECT stop_sequence,station_id,arrival_sec,departure_sec,callable,source_station_code
+              FROM stop_time WHERE trip_id=? ORDER BY stop_sequence
+            `);
+            const insertTripRow = db.prepare(`
+              INSERT INTO trip(
+                logical_line,service_day,train_no,direction,service_kind,service_priority,
+                origin_station_id,destination_station_id
+              ) VALUES (?,'SAT',?,?,?,?,?,?)
+            `);
+            const insertSource = db.prepare(`INSERT INTO trip_source(trip_id,source_id) VALUES (?,?)`);
+            const insertStop = db.prepare(`
+              INSERT INTO stop_time(
+                trip_id,stop_sequence,station_id,arrival_sec,departure_sec,callable,source_station_code
+              ) VALUES (?,?,?,?,?,?,?)
+            `);
+            db.transaction(() => {
+              db.query(`DELETE FROM trip WHERE service_day='SAT'`).run();
+              for (const trip of endTrips) {
+                insertTripRow.run(
+                  trip.logical_line,
+                  trip.train_no,
+                  trip.direction,
+                  trip.service_kind,
+                  trip.service_priority,
+                  trip.origin_station_id,
+                  trip.destination_station_id,
+                );
+                const satTripId = Number((db.query(`
+                  SELECT trip_id FROM trip
+                  WHERE logical_line=? AND service_day='SAT' AND train_no=?
+                `).get(trip.logical_line, trip.train_no) as { trip_id: number }).trip_id);
+                for (const row of sources.all(trip.trip_id) as Array<{ source_id: string }>) {
+                  insertSource.run(satTripId, row.source_id);
+                }
+                for (const row of stops.all(trip.trip_id) as Array<{
+                  stop_sequence: number;
+                  station_id: number;
+                  arrival_sec: number | null;
+                  departure_sec: number | null;
+                  callable: number;
+                  source_station_code: string;
+                }>) {
+                  insertStop.run(
+                    satTripId,
+                    row.stop_sequence,
+                    row.station_id,
+                    row.arrival_sec,
+                    row.departure_sec,
+                    row.callable,
+                    row.source_station_code,
+                  );
+                }
+              }
+            })();
+            metadata(db, "sat_schedule_source", "END(dayCd=9):database-exact-clone");
+            return endTrips.length;
+          }
+
+          /**
+           * KRIC remains authoritative. A deterministic registry-based backup is
+           * generated only when an individual source has zero usable KRIC trips for
+           * DAY or END. SAT is then rebuilt exactly from END.
+           */
+          export function loadMissingDefaultTimetables(
+            db: Database,
+            sources: SourceRow[],
+            stations: StationRow[],
+          ): TimetableFallbackStats {
+            const targets: TimetableFallbackTarget[] = [];
+            let generatedTrips = 0;
+            for (const source of sources) {
+              if (source.timetable === "0") continue;
+              const path = sourcePath(db, source, stations);
+              if (path.length < 2) continue;
+              for (const day of ["DAY", "END"] as const) {
+                if (sourceTripCount(db, source.source_id, day) > 0) continue;
+                const generated = generateSourceDay(db, source, path, day);
+                generatedTrips += generated;
+                targets.push({ sourceId: source.source_id, line: source.logical_line, day });
+                console.warn(`[build:data][timetable-fallback] ${JSON.stringify({
+                  type: "default_timetable_fallback",
+                  source_id: source.source_id,
+                  line: source.logical_line,
+                  day,
+                  generated_trips: generated,
+                })}`);
+              }
+            }
+            const saturdayTrips = synchronizeSaturdayFromEnd(db);
+            metadata(db, "default_timetable_fallback_source_days", targets.length);
+            metadata(db, "default_timetable_fallback_targets", JSON.stringify(targets));
+            buildSource(
+              db,
+              "default-timetable-fallback",
+              "generated:station-registry-backup",
+              generatedTrips,
+              `KRIC-missing source/day only; targets=${JSON.stringify(targets)}`,
+            );
+            return { targets, generatedTrips, saturdayTrips };
+          }
+          TS
+
+          cat > tests/engine/timetable-fallback.test.ts <<'TS'
+          import { describe, expect, test } from "bun:test";
+          import { Database } from "bun:sqlite";
+          import { TRANSIT_SCHEMA_SQL } from "../../src/infra/transit-schema";
+          import type { Event, SourceRow, StationRow } from "../../scripts/transit-build/common";
+          import { loadMissingDefaultTimetables } from "../../scripts/transit-build/timetable-fallback";
+          import { insertTrip } from "../../scripts/transit-build/timetable";
+
+          const source: SourceRow = {
+            source_id: "test-source", logical_line: "2호선", operator_code: "T", operator_name: "test",
+            line_code: "2", source_line_name: "2호선", section: "", realtime: "0", timetable: "1", priority: "1",
+          };
+          const stations: StationRow[] = [1, 2, 3].map((index) => ({
+            source_id: source.source_id,
+            station_code: `S${index}`,
+            source_station_name: `역${index}`,
+            canonical_name: `역${index}`,
+            sequence_hint: String(index),
+          }));
+
+          function db(): Database {
+            const database = new Database(":memory:", { strict: true });
+            database.exec(TRANSIT_SCHEMA_SQL);
+            database.query(`
+              INSERT INTO source_registry(
+                source_id,logical_line,operator_code,operator_name,line_code,source_line_name,
+                realtime,timetable,section,priority
+              ) VALUES (?,?,?,?,?,?,?,?,?,?)
+            `).run(source.source_id, source.logical_line, source.operator_code, source.operator_name, source.line_code, source.source_line_name, 0, 1, "", 1);
+            stations.forEach((station, index) => {
+              const stationId = index + 1;
+              database.query(`INSERT INTO station(station_id,station_key,canonical_name,display_name) VALUES (?,?,?,?)`)
+                .run(stationId, `T:${index}`, station.canonical_name, station.canonical_name);
+              database.query(`INSERT INTO station_source(source_id,station_code,station_id,source_station_name,sequence_hint) VALUES (?,?,?,?,?)`)
+                .run(source.source_id, station.station_code, stationId, station.source_station_name, Number(station.sequence_hint));
+            });
+            return database;
+          }
+
+          function kricDayEvents(): Event[] {
+            return stations.map((station, index) => ({
+              sourceId: source.source_id,
+              line: source.logical_line,
+              day: "DAY" as const,
+              trainNo: "KRIC-001",
+              stationId: index + 1,
+              stationCode: station.station_code,
+              station: station.canonical_name,
+              arrival: index === 0 ? null : 6 * 3600 + index * 120,
+              departure: index === stations.length - 1 ? null : 6 * 3600 + index * 120 + 20,
+              sequenceHint: index + 1,
+              rawKind: "local",
+            }));
+          }
+
+          describe("KRIC-missing timetable fallback", () => {
+            test("fills only missing source days and clones SAT exactly from END", () => {
+              const database = db();
+              try {
+                const stats = loadMissingDefaultTimetables(database, [source], stations);
+                expect(stats.targets).toEqual([
+                  { sourceId: source.source_id, line: "2호선", day: "DAY" },
+                  { sourceId: source.source_id, line: "2호선", day: "END" },
+                ]);
+                expect(stats.generatedTrips).toBe(48);
+                const count = (day: string) => Number((database.query(`SELECT COUNT(*) AS n FROM trip WHERE service_day=?`).get(day) as { n: number }).n);
+                expect(count("DAY")).toBe(24);
+                expect(count("END")).toBe(24);
+                expect(count("SAT")).toBe(24);
+                const mismatch = Number((database.query(`
+                  WITH sat AS (
+                    SELECT logical_line,train_no,direction,service_kind,service_priority FROM trip WHERE service_day='SAT'
+                  ), endday AS (
+                    SELECT logical_line,train_no,direction,service_kind,service_priority FROM trip WHERE service_day='END'
+                  ), delta AS (
+                    SELECT * FROM sat EXCEPT SELECT * FROM endday
+                    UNION ALL
+                    SELECT * FROM endday EXCEPT SELECT * FROM sat
+                  ) SELECT COUNT(*) AS n FROM delta
+                `).get() as { n: number }).n);
+                expect(mismatch).toBe(0);
+              } finally { database.close(); }
+            });
+
+            test("does not replace an available KRIC weekday", () => {
+              const database = db();
+              try {
+                insertTrip(database, "2호선", "DAY", "KRIC-001", "DOWN", "local", [source.source_id], kricDayEvents());
+                const stats = loadMissingDefaultTimetables(database, [source], stations);
+                expect(stats.targets).toEqual([{ sourceId: source.source_id, line: "2호선", day: "END" }]);
+                const fallbackWeekday = Number((database.query(`
+                  SELECT COUNT(*) AS n FROM trip WHERE service_day='DAY' AND train_no LIKE 'FB-%'
+                `).get() as { n: number }).n);
+                expect(fallbackWeekday).toBe(0);
+                expect(Number((database.query(`SELECT COUNT(*) AS n FROM trip WHERE service_day='DAY' AND train_no='KRIC-001'`).get() as { n: number }).n)).toBe(1);
+              } finally { database.close(); }
+            });
+          });
+          TS
+
+          cat > .github/workflows/update-transit-data.yml <<'YAML'
+          name: Transit Data Update
+
+          on:
+            schedule:
+              # 03:00 Asia/Seoul = 18:00 UTC on the previous date.
+              - cron: "0 18 * * *"
+            workflow_dispatch:
+            push:
+              branches:
+                - dev/ts-bun
+                - feat/sqlite-transit-data
+              paths:
+                - .github/workflows/update-transit-data.yml
+                - scripts/transit-build/**
+                - scripts/build-transit-db.ts
+                - datasets/**
+
+          permissions:
+            contents: write
+
+          concurrency:
+            group: transit-data-${{ github.ref_name }}
+            cancel-in-progress: false
+
+          jobs:
+            refresh:
+              runs-on: ubuntu-latest
+              timeout-minutes: 60
+              env:
+                KRIC_API_KEY: ${{ secrets.KRIC_API_KEY }}
+                TRANSIT_DATA_MODE: live
+                TRANSIT_BUILD_CONCURRENCY: "16"
+                TRANSIT_BUILD_HTTP_TIMEOUT_MS: "12000"
+              steps:
+                - uses: actions/checkout@v5
+                  with:
+                    ref: ${{ github.ref_name }}
+                    fetch-depth: 0
+
+                - uses: oven-sh/setup-bun@v2
+                  with:
+                    bun-version: 1.3.14
+
+                - name: Require KRIC credential
+                  shell: bash
+                  run: |
+                    if [ -z "$KRIC_API_KEY" ]; then
+                      echo "KRIC_API_KEY repository secret is required for the daily live timetable refresh." >&2
+                      exit 1
+                    fi
+
+                - name: Install dependencies
+                  run: bun install --frozen-lockfile
+
+                - name: Build KRIC-first SQLite with last-known-good bootstrap
+                  id: build
+                  shell: bash
+                  run: |
+                    set +e
+                    bun run build:data 2>&1 | tee /tmp/transit-live.log
+                    live_rc=${PIPESTATUS[0]}
+                    set -e
+
+                    source=live
+                    if [ "$live_rc" -ne 0 ]; then
+                      if [ -f data/transit.sqlite ]; then
+                        source=previous
+                        echo "::warning::KRIC live refresh failed; preserving the last known-good SQLite."
+                      else
+                        source=fallback
+                        echo "::warning::KRIC live refresh failed before the first database existed; bootstrapping deterministic backup data."
+                        TRANSIT_DATA_MODE=fixture bun run build:data
+                      fi
+                    fi
+                    echo "source=$source" >> "$GITHUB_OUTPUT"
+                    echo "live_rc=$live_rc" >> "$GITHUB_OUTPUT"
+
+                    if [ "$source" = "live" ]; then
+                      rm -f data/transit-refresh-failure.json
+                    else
+                      python3 - <<'PY'
+                    import json, os, re
+                    from pathlib import Path
+                    raw = Path('/tmp/transit-live.log').read_text(errors='replace').splitlines()
+                    keep = [line for line in raw if '[build:data]' in line or 'KRIC' in line or '시간표' in line or 'Error' in line]
+                    safe = []
+                    for line in keep[-100:]:
+                        line = re.sub(r'(serviceKey=)[^&\s]+', r'\1REDACTED', line)
+                        safe.append(line[:1000])
+                    Path('data').mkdir(exist_ok=True)
+                    Path('data/transit-refresh-failure.json').write_text(json.dumps({
+                        'type': 'transit_refresh_failure',
+                        'head_sha': os.environ.get('GITHUB_SHA', ''),
+                        'fallback': os.environ.get('FALLBACK_SOURCE', ''),
+                        'log_tail': safe,
+                    }, ensure_ascii=False, indent=2) + '\n')
+                    PY
+                    fi
+                  env:
+                    FALLBACK_SOURCE: ${{ steps.build.outputs.source }}
+
+                - name: Validate selected database
+                  run: |
+                    bun run doctor
+                    bun run audit:transfers
+                    bun test tests/engine/data-repository.test.ts tests/engine/rapid-service.test.ts tests/engine/transfer-policy.test.ts tests/engine/timetable-fallback.test.ts
+
+                - name: Commit validated database
+                  shell: bash
+                  run: |
+                    git add -f data/transit.sqlite
+                    if [ -f data/transit-refresh-failure.json ]; then
+                      git add -f data/transit-refresh-failure.json
+                    else
+                      git rm -f --ignore-unmatch data/transit-refresh-failure.json >/dev/null 2>&1 || true
+                    fi
+                    if git diff --cached --quiet; then
+                      echo "transit data is unchanged"
+                      exit 0
+                    fi
+                    git config user.name "github-actions[bot]"
+                    git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+                    case "${{ steps.build.outputs.source }}" in
+                      live) message="data: refresh KRIC transit SQLite [skip ci]" ;;
+                      fallback) message="data: bootstrap fallback transit SQLite [skip ci]" ;;
+                      *) message="data: preserve transit SQLite after KRIC refresh failure [skip ci]" ;;
+                    esac
+                    git commit -m "$message"
+                    git push origin "HEAD:${GITHUB_REF_NAME}"
+
+                - name: Mark stale or fallback refresh as failed
+                  if: steps.build.outputs.source != 'live'
+                  run: |
+                    echo "KRIC live refresh did not replace the database; backup/last-known-good data was preserved." >&2
+                    exit 1
+          YAML
+
+      - name: Validate product patch
+        run: |
+          bun install --frozen-lockfile
+          TRANSIT_DATA_MODE=fixture bun run build:data
+          bun run doctor
+          bun run typecheck
+          bun test tests/engine/timetable-fallback.test.ts tests/engine/timetable-service-kind.test.ts tests/engine/data-repository.test.ts tests/engine/rapid-service.test.ts
+
+      - name: Commit product change and remove this workflow
+        shell: bash
+        run: |
+          rm .github/workflows/apply-live-fallback.yml
+          git add scripts/transit-build/timetable.ts scripts/transit-build/timetable-fallback.ts scripts/build-transit-db.ts tests/engine/timetable-fallback.test.ts .github/workflows/update-transit-data.yml .github/workflows/apply-live-fallback.yml
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git commit -m "fix(data): bound KRIC source failures with targeted fallback"
+          git push origin HEAD:feat/sqlite-transit-data
