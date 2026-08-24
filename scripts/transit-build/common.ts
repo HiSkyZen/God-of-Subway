@@ -20,7 +20,7 @@ function intEnv(name: string, fallback: number, min: number, max: number): numbe
   const value = Number(Bun.env[name] ?? fallback);
   return Number.isFinite(value) ? Math.max(min, Math.min(max, Math.trunc(value))) : fallback;
 }
-export const BUILD_CONCURRENCY = intEnv("TRANSIT_BUILD_CONCURRENCY", 8, 1, 24);
+export const BUILD_CONCURRENCY = intEnv("TRANSIT_BUILD_CONCURRENCY", 32, 1, 128);
 export const BUILD_HTTP_TIMEOUT_MS = intEnv("TRANSIT_BUILD_HTTP_TIMEOUT_MS", 15000, 3000, 60000);
 export const ALLOW_PARTIAL = /^(1|true|yes)$/i.test(Bun.env.TRANSIT_BUILD_ALLOW_PARTIAL?.trim() || "");
 
@@ -94,17 +94,23 @@ export async function mapConcurrent<T, R>(items: readonly T[], limit: number, wo
 }
 
 function secureKey(): string { const key = Bun.env.KRIC_API_KEY?.trim() ?? ""; if (!key) throw new Error("live 데이터 빌드에는 KRIC_API_KEY 환경변수가 필요합니다."); return key; }
+const KRIC_TIMETABLE_RETRIES = intEnv("TRANSIT_BUILD_KRIC_RETRIES", 10, 0, 10);
+function effectiveKricRetries(endpoint: string, requested: number): number {
+  return /(?:subwayTimetableExp|subwayTimetable|stationTimetable)$/u.test(endpoint)
+    ? Math.max(requested, KRIC_TIMETABLE_RETRIES)
+    : requested;
+}
 export async function kricJson(endpoint: string, params: Record<string, string>, retries = 2): Promise<unknown> {
   const url = new URL(`${KRIC_BASE}/${endpoint}`); url.searchParams.set("serviceKey", secureKey()); url.searchParams.set("format", "json"); for (const [name, value] of Object.entries(params)) url.searchParams.set(name, value);
+  const attempts = effectiveKricRetries(endpoint, retries);
   let error = "";
-  for (let attempt = 0; attempt <= retries; attempt += 1) {
+  for (let attempt = 0; attempt <= attempts; attempt += 1) {
     const controller = new AbortController(); const timer = setTimeout(() => controller.abort(), BUILD_HTTP_TIMEOUT_MS);
     try {
       const response = await fetch(url, { signal: controller.signal, headers: { Accept: "application/json", "User-Agent": "JigeumTa-SQLite-Builder/1.0" } });
       const text = await response.text(); if (!response.ok) throw new Error(`HTTP ${response.status}`); return JSON.parse(text);
     } catch (cause) {
       error = cause instanceof Error ? `${cause.name}: ${cause.message}` : String(cause);
-      if (attempt < retries) await Bun.sleep(250 * (attempt + 1));
     } finally { clearTimeout(timer); }
   }
   throw new Error(`${endpoint} 호출 실패: ${error}`);
