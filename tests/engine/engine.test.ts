@@ -44,7 +44,7 @@ describe("지금타 Bun SQLite engine", () => {
   test("SQLite repository validates generated schema and stays lazy for materialized datasets", () => {
     const lazy = new SqliteDataRepository();
     expect(lazy.loadedDatasets()).toEqual([]);
-    expect(lazy.validate()).toMatchObject({ stationLines: 25, graphModes: ["DAY", "SAT", "END"], schemaVersion: 1, buildMode: "fixture" });
+    expect(lazy.validate()).toMatchObject({ stationLines: 25, graphModes: ["DAY", "SAT", "END"], schemaVersion: 2, buildMode: "fixture" });
     expect(lazy.loadedDatasets()).toEqual([]);
     expect(Object.keys(lazy.data.s1.weekday).length).toBeGreaterThan(0);
     expect(lazy.loadedDatasets()).toEqual(["s1-weekday"]);
@@ -65,8 +65,8 @@ describe("지금타 Bun SQLite engine", () => {
     expect(railServiceKind("공항철도", fake)).toBe("local");
   });
 
-  test("transfer distance fallback uses exactly 1.2 m/s and Seoul Metro pair remains authoritative", () => {
-    expect(modeledMissingTransferSeconds(120)).toBe(100);
+  test("missing transfer fallback ignores distance while Seoul Metro pair remains authoritative", () => {
+    expect(modeledMissingTransferSeconds(120)).toBe(180);
     expect(transferSeconds("교대", "2호선", "3호선")).toBe(63);
   });
 
@@ -103,10 +103,11 @@ describe("지금타 Bun SQLite engine", () => {
     const health = healthSnapshot();
     expect(health.ok).toBe(true);
     expect(health).toMatchObject({ upstream_parity: "V13.4.8" });
-    expect(health.data).toMatchObject({ storage: "sqlite", schema_version: 1, build_mode: "fixture" });
-    expect(health.sqlite).toMatchObject({ schema_version: 1, build_mode: "fixture" });
+    expect(health.data).toMatchObject({ storage: "sqlite", schema_version: 2, build_mode: "fixture" });
+    expect(health.sqlite).toMatchObject({ schema_version: 2, build_mode: "fixture" });
     expect(health.api_key_configured).toBeBoolean();
     expect(health.cache).toBeObject();
+    expect(health.transfer_policy).toMatchObject({ kric_runtime_distance: false, kric_location_hints: "daily-build-only-lowest-priority" });
     expect(JSON.stringify(health)).not.toContain("SEOUL_API_KEY=");
     expect(JSON.stringify(health)).not.toContain("KRIC_API_KEY=");
   });
