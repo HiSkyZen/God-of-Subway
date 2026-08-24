@@ -1,5 +1,6 @@
 name: Transit Data Update
 
+# KRIC secret-backed verification trigger after no-delay retry hardening.
 on:
   schedule:
     # 03:00 Asia/Seoul = 18:00 UTC on the previous date.
