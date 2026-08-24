@@ -20,9 +20,7 @@ jobs:
       - run: bun install --frozen-lockfile
       - run: bun run build:data
       - run: bun run check
-      - run: bun run build
-      - run: bun run build:client
-      - run: bun run scripts/promote-static.ts
+      - run: bun run build:all
       - run: bun run verify:pwa
       - run: bun run verify:aot
 
@@ -64,12 +62,16 @@ jobs:
         id: build
         shell: bash
         run: |
+          rm -f data/transit.bootstrap-candidate.sqlite data/transit.bootstrap-candidate.sqlite-wal data/transit.bootstrap-candidate.sqlite-shm
           set +e
-          TRANSIT_DATA_MODE=live timeout --signal=TERM --kill-after=30s 25m bash -c 'set -e; bun run build:data; bun run scripts/verify-live-transit.ts' 2>&1 | tee /tmp/transit-live.log
+          TRANSIT_DATA_MODE=live TRANSIT_DB_PATH=data/transit.bootstrap-candidate.sqlite timeout --signal=TERM --kill-after=30s 25m bash -c 'set -e; bun run build:data; bun run scripts/verify-live-transit.ts' 2>&1 | tee /tmp/transit-live.log
           live_rc=${PIPESTATUS[0]}
           set -e
           source=live
-          if [ "$live_rc" -ne 0 ]; then
+          if [ "$live_rc" -eq 0 ]; then
+            mv data/transit.bootstrap-candidate.sqlite data/transit.sqlite
+          else
+            rm -f data/transit.bootstrap-candidate.sqlite data/transit.bootstrap-candidate.sqlite-wal data/transit.bootstrap-candidate.sqlite-shm
             source=fallback
             TRANSIT_DATA_MODE=fixture bun run build:data
           fi
@@ -85,11 +87,8 @@ jobs:
                   continue
               safe.append(re.sub(r'(serviceKey=)[^&\s]+', r'\1REDACTED', line)[:1000])
           Path('data/transit-refresh-failure.json').write_text(json.dumps({
-              'type': 'transit_refresh_failure',
-              'fallback': 'fixture',
-              'timetable_retries': 10,
-              'concurrency': 96,
-              'retry_delay_ms': 0,
+              'type': 'transit_refresh_failure', 'fallback': 'fixture',
+              'timetable_retries': 10, 'concurrency': 96, 'retry_delay_ms': 0,
               'log_tail': safe[-100:],
           }, ensure_ascii=False, indent=2) + '\n')
           PY
