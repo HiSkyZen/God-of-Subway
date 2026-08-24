@@ -1,0 +1,18 @@
+{
+  "type": "transit_refresh_failure",
+  "fallback": "fallback",
+  "timetable_retries": 10,
+  "concurrency": 96,
+  "retry_delay_ms": 0,
+  "log_tail": [
+    "[build:data][transfer-diagnostic] {\"type\":\"missing_transfer_pairs\",\"count\":0,\"pairs\":[]}",
+    "[build:data][kric-endpoint-discovery-failure] {\"type\":\"kric_timetable_endpoint_discovery_failure\",\"source_id\":\"S1:1:all\",\"day\":\"DAY\"}",
+    "[build:data][kric-endpoint-discovery-failure] {\"type\":\"kric_timetable_endpoint_discovery_failure\",\"source_id\":\"S1:2:all\",\"day\":\"DAY\"}",
+    "[build:data][kric-endpoint-discovery-failure] {\"type\":\"kric_timetable_endpoint_discovery_failure\",\"source_id\":\"S1:4:all\",\"day\":\"END\"}",
+    "[build:data][kric-endpoint-discovery-failure] {\"type\":\"kric_timetable_endpoint_discovery_failure\",\"source_id\":\"IC:7:all\",\"day\":\"DAY\"}",
+    "[build:data][kric-endpoint-discovery-failure] {\"type\":\"kric_timetable_endpoint_discovery_failure\",\"source_id\":\"IC:I1:all\",\"day\":\"DAY\"}",
+    "[build:data][kric-endpoint-discovery-failure] {\"type\":\"kric_timetable_endpoint_discovery_failure\",\"source_id\":\"IC:I2:all\",\"day\":\"DAY\"}",
+    "[build:data][kric-endpoint-discovery-failure] {\"type\":\"kric_timetable_endpoint_discovery_failure\",\"source_id\":\"EV:E1:all\",\"day\":\"DAY\"}",
+    "[build:data][kric-endpoint-discovery-failure] {\"type\":\"kric_timetable_endpoint_discovery_failure\",\"source_id\":\"UL:U1:all\",\"day\":\"END\"}"
+  ]
+}
