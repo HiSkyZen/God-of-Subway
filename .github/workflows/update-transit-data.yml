@@ -57,13 +57,17 @@ jobs:
         id: build
         shell: bash
         run: |
+          rm -f data/transit.refresh-candidate.sqlite data/transit.refresh-candidate.sqlite-wal data/transit.refresh-candidate.sqlite-shm
           set +e
-          timeout --signal=TERM --kill-after=30s 25m bash -c 'set -e; bun run build:data; bun run scripts/verify-live-transit.ts' 2>&1 | tee /tmp/transit-live.log
+          TRANSIT_DB_PATH=data/transit.refresh-candidate.sqlite timeout --signal=TERM --kill-after=30s 25m bash -c 'set -e; bun run build:data; bun run scripts/verify-live-transit.ts' 2>&1 | tee /tmp/transit-live.log
           live_rc=${PIPESTATUS[0]}
           set -e
 
           source=live
-          if [ "$live_rc" -ne 0 ]; then
+          if [ "$live_rc" -eq 0 ]; then
+            mv data/transit.refresh-candidate.sqlite data/transit.sqlite
+          else
+            rm -f data/transit.refresh-candidate.sqlite data/transit.refresh-candidate.sqlite-wal data/transit.refresh-candidate.sqlite-shm
             if [ -f data/transit.sqlite ]; then
               source=previous
               echo "::warning::KRIC refresh failed after 10 no-delay retries; preserving last-known-good SQLite for this scheduled run."
