@@ -8,7 +8,6 @@ import {
   loadHolidays,
   loadSeoulTransfers,
   loadStaticRegistry,
-  loadStationCoordinates,
   loadTransferDetails,
   loadUpstreamTransferFallback,
 } from "./transit-build/static";
@@ -76,8 +75,6 @@ try {
   metadata(db, "timetable_source", MODE === "live" ? "KRIC dayCd=8 weekday + dayCd=9 weekend/holiday; SAT copies END" : "deterministic CI fixture");
 
   const { sources, stations } = loadStaticRegistry(db);
-  const coordinateCount = loadStationCoordinates(db);
-  metadata(db, "fare_coordinate_rows", coordinateCount);
   const seoulTransferCount = loadSeoulTransfers(db);
   const upstreamTransferCount = loadUpstreamTransferFallback(db);
   const detailCounts = loadTransferDetails(db);

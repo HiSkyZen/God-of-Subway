@@ -1,7 +1,6 @@
 import { Database } from "bun:sqlite";
-import { existsSync, readFileSync } from "node:fs";
+import { existsSync } from "node:fs";
 import { resolve } from "node:path";
-import { gunzipSync } from "node:zlib";
 import {
   DATASETS,
   buildSource,
@@ -22,7 +21,6 @@ interface TransferRow {
   time_source?: string;
   note?: string;
 }
-interface CoordinateRow { logical_line: string; station: string; latitude: string; longitude: string; source?: string; }
 interface TransferDetailRow {
   station: string;
   from_line: string;
@@ -36,19 +34,6 @@ interface TransferDetailRow {
   seconds: string;
   source: string;
   position_source?: string;
-}
-
-function parseDatasetTsv(relativePath: string): Record<string, string>[] {
-  const path = resolve(DATASETS, relativePath);
-  if (!path.endsWith(".gz")) return parseTsv(path);
-  const text = gunzipSync(readFileSync(path)).toString("utf8").replace(/^\uFEFF/, "").trimEnd();
-  if (!text) return [];
-  const [header, ...lines] = text.split(/\r?\n/);
-  const keys = header.split("\t");
-  return lines.filter(Boolean).map((line) => {
-    const values = line.split("\t");
-    return Object.fromEntries(keys.map((key, index) => [key, values[index] ?? ""]));
-  });
 }
 
 const DISJOINT_PHYSICAL_LINES: Record<string, ReadonlySet<string>> = {
@@ -166,25 +151,6 @@ function numberOrNull(value: string | undefined): number | null {
   const n = Number(value); return Number.isFinite(n) ? n : null;
 }
 
-export function loadStationCoordinates(db: Database): number {
-  const path = resolve(DATASETS, "stations/station-coordinates.tsv.gz");
-  if (!existsSync(path)) return 0;
-  const rows = parseDatasetTsv("stations/station-coordinates.tsv.gz") as unknown as CoordinateRow[];
-  const update = db.prepare(`UPDATE station SET latitude=?, longitude=? WHERE station_id=?`);
-  let updated = 0;
-  db.transaction(() => {
-    for (const row of rows) {
-      const stationId = transferStationId(db, row.station, row.logical_line, row.logical_line);
-      const latitude = Number(row.latitude); const longitude = Number(row.longitude);
-      if (!stationId || !Number.isFinite(latitude) || !Number.isFinite(longitude)) continue;
-      updated += Number(update.run(latitude, longitude, stationId).changes || 0);
-    }
-  })();
-  buildSource(db, "molit-station-coordinates", "datasets/stations/station-coordinates.tsv.gz", updated,
-    "MOLIT 2026-06-30 station coordinates; fare-distance estimate only; never used for transfer time");
-  return updated;
-}
-
 export function loadSeoulTransfers(db: Database): number {
   const rows = parseTsv(resolve(DATASETS, "transfers/seoul-metro-transfer-times.tsv")) as unknown as TransferRow[];
   const insert = db.prepare(`
@@ -205,9 +171,9 @@ export function loadSeoulTransfers(db: Database): number {
 }
 
 export function loadUpstreamTransferFallback(db: Database): number {
-  const path = resolve(DATASETS, "transfers/upstream-fallback-pairs.tsv.gz");
+  const path = resolve(DATASETS, "transfers/upstream-fallback-pairs.tsv");
   if (!existsSync(path)) return 0;
-  const rows = parseDatasetTsv("transfers/upstream-fallback-pairs.tsv.gz") as unknown as TransferRow[];
+  const rows = parseTsv(path) as unknown as TransferRow[];
   const insert = db.prepare(`
     INSERT OR IGNORE INTO transfer_pair(station_id,from_line,to_line,distance_m,seconds,source)
     VALUES (?,?,?,?,?,?)
@@ -227,14 +193,14 @@ export function loadUpstreamTransferFallback(db: Database): number {
       ).changes || 0);
     }
   })();
-  buildSource(db, "upstream-transfer-fallback", "datasets/transfers/upstream-fallback-pairs.tsv.gz", loaded, "Imported only for pairs absent from authoritative Seoul Metro transfer-time data; includes audited same-line branch/platform changes");
+  buildSource(db, "upstream-transfer-fallback", "datasets/transfers/upstream-fallback-pairs.tsv", loaded, "Imported only for pairs absent from authoritative Seoul Metro transfer-time data; includes audited same-line branch/platform changes");
   return loaded;
 }
 
 function loadDetailFile(db: Database, relativePath: string, sourceName: string, sourcePrefix = ""): number {
   const path = resolve(DATASETS, relativePath);
   if (!existsSync(path)) return 0;
-  const rows = parseDatasetTsv(relativePath) as unknown as TransferDetailRow[];
+  const rows = parseTsv(path) as unknown as TransferDetailRow[];
   const insert = db.prepare(`
     INSERT INTO transfer_detail(
       station_id,from_line,to_line,from_direction,to_direction,
@@ -278,10 +244,10 @@ function loadDetailFile(db: Database, relativePath: string, sourceName: string, 
  * Live KRIC stLocCont/clsLocCont hints are loaded separately after these rows.
  */
 export function loadTransferDetails(db: Database): Record<string, number> {
-  const seoul = loadDetailFile(db, "transfers/seoul-metro-transfer-details.tsv.gz", "seoul-metro-transfer-detail-2026-03-03");
-  const molit = loadDetailFile(db, "transfers/public-transfer-details.tsv.gz", "molit-fast-transfer-position", "molit-fast-transfer");
-  const upstream = loadDetailFile(db, "transfers/upstream-transfer-details.tsv.gz", "upstream-transfer-detail-fallback");
-  const kricStatic = loadDetailFile(db, "transfers/public-transfer-details.tsv.gz", "kric-static-position-fallback", "kric-static-position");
+  const seoul = loadDetailFile(db, "transfers/seoul-metro-transfer-details.tsv", "seoul-metro-transfer-detail-2026-03-03");
+  const molit = loadDetailFile(db, "transfers/public-transfer-details.tsv", "molit-fast-transfer-position", "molit-fast-transfer");
+  const upstream = loadDetailFile(db, "transfers/upstream-transfer-details.tsv", "upstream-transfer-detail-fallback");
+  const kricStatic = loadDetailFile(db, "transfers/public-transfer-details.tsv", "kric-static-position-fallback", "kric-static-position");
   return { seoul, molit, upstream, kric_static: kricStatic };
 }
 
