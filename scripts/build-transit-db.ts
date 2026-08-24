@@ -9,8 +9,10 @@ import {
   loadSeoulTransfers,
   loadStaticRegistry,
   loadTransferDetails,
-  loadUpstreamTransferFallback,
 } from "./transit-build/static";
+import { loadStationCoordinates } from "./transit-build/coordinates";
+import { loadUpstreamTransferSnapshot } from "./transit-build/upstream-snapshot";
+import { loadLiveUpstreamTransfers } from "./transit-build/upstream-transfer";
 import { deriveRideEdges, loadLiveTimetables } from "./transit-build/timetable";
 import { loadKricTransferLocationHints, seedMissingTransferFallbacks } from "./transit-build/transfer";
 
@@ -75,9 +77,13 @@ try {
   metadata(db, "timetable_source", MODE === "live" ? "KRIC dayCd=8 weekday + dayCd=9 weekend/holiday; SAT copies END" : "deterministic CI fixture");
 
   const { sources, stations } = loadStaticRegistry(db);
+  const coordinateCount = loadStationCoordinates(db);
+  metadata(db, "station_coordinate_rows", coordinateCount);
   const seoulTransferCount = loadSeoulTransfers(db);
-  const upstreamTransferCount = loadUpstreamTransferFallback(db);
+  const upstreamTransferCount = loadUpstreamTransferSnapshot(db);
   const detailCounts = loadTransferDetails(db);
+  const liveUpstream = MODE === "live" ? await loadLiveUpstreamTransfers(db) : { pairs: 0, details: 0, version: "fixture" };
+  metadata(db, "upstream_live_transfer", JSON.stringify(liveUpstream));
   const fallbackStats = seedMissingTransferFallbacks(db);
   metadata(db, "upstream_transfer_fallback_rows", upstreamTransferCount);
   metadata(db, "missing_verified_transfer_pairs", fallbackStats.missingVerifiedPairs.length);
