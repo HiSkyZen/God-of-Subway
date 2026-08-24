@@ -28,6 +28,12 @@ function cleanupCandidate(): void {
   rmSync(`${CANDIDATE}-shm`, { force: true });
 }
 
+function cleanupPendingBundleInput(): void {
+  rmSync(PENDING, { force: true });
+  rmSync(`${PENDING}-wal`, { force: true });
+  rmSync(`${PENDING}-shm`, { force: true });
+}
+
 async function validate(path: string, requireLive: boolean): Promise<boolean> {
   const env = { TRANSIT_DB_PATH: path };
   if (requireLive && !await run(["bun", "run", "scripts/verify-live-transit.ts"], env)) return false;
@@ -57,6 +63,7 @@ if (!existsSync(FAILURE_MARKER)) {
   } else {
     console.log("[deploy:data] using scheduled validated transit.sqlite");
   }
+  cleanupPendingBundleInput();
   process.exit(0);
 }
 
@@ -90,6 +97,7 @@ if (
     rmSync(DB, { force: true });
     renameSync(CANDIDATE, DB);
     rmSync(FAILURE_MARKER, { force: true });
+    cleanupPendingBundleInput();
     console.log("[deploy:data] targeted deploy-time KRIC recovery succeeded; repaired live SQLite promoted");
     process.exit(0);
   }
@@ -100,6 +108,8 @@ if (
 } else {
   console.warn("[deploy:data] no retryable partial live candidate is available; using LKG/fixture data");
 }
+
+cleanupPendingBundleInput();
 
 if (existsSync(DB)) {
   if (!await validate("data/transit.sqlite", false)) throw new Error("existing LKG/fallback transit SQLite failed validation");
