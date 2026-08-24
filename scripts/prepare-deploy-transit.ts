@@ -3,14 +3,8 @@ import { resolve } from "node:path";
 
 const ROOT = resolve(import.meta.dir, "..");
 const DB = resolve(ROOT, "data/transit.sqlite");
-const PENDING = resolve(ROOT, "data/transit.pending.sqlite");
 const CANDIDATE = resolve(ROOT, "data/transit.deploy-candidate.sqlite");
 const FAILURE_MARKER = resolve(ROOT, "data/transit-refresh-failure.json");
-
-type FailureMarker = {
-  failed_timetable_units?: unknown[];
-  [key: string]: unknown;
-};
 
 async function run(command: string[], env: Record<string, string> = {}): Promise<boolean> {
   const proc = Bun.spawn(command, {
@@ -36,73 +30,52 @@ async function validate(path: string, requireLive: boolean): Promise<boolean> {
   return true;
 }
 
-async function buildFixtureFallback(): Promise<boolean> {
+async function build(mode: "live" | "fixture", requireLive: boolean): Promise<boolean> {
   cleanupCandidate();
-  const env = {
-    TRANSIT_DATA_MODE: "fixture",
+  const env: Record<string, string> = {
+    TRANSIT_DATA_MODE: mode,
     TRANSIT_DB_PATH: "data/transit.deploy-candidate.sqlite",
   };
+  if (mode === "live") {
+    env.TRANSIT_BUILD_CONCURRENCY = "96";
+    env.TRANSIT_BUILD_HTTP_TIMEOUT_MS = "30000";
+    env.TRANSIT_BUILD_KRIC_RETRIES = "10";
+  }
   if (!await run(["bun", "run", "scripts/build-transit-db.ts"], env)) return false;
   if (!existsSync(CANDIDATE)) return false;
-  if (!await validate("data/transit.deploy-candidate.sqlite", false)) return false;
-  rmSync(DB, { force: true });
-  renameSync(CANDIDATE, DB);
+  if (!await validate("data/transit.deploy-candidate.sqlite", requireLive)) return false;
   return true;
 }
 
-if (!existsSync(FAILURE_MARKER)) {
-  if (!existsSync(DB)) {
-    console.warn("[deploy:data] scheduled transit.sqlite is missing; building deterministic fallback SQLite");
-    if (!await buildFixtureFallback()) throw new Error("deploy transit fallback build failed");
-  } else {
-    console.log("[deploy:data] using scheduled validated transit.sqlite");
-  }
+const needsRetrigger = !existsSync(DB) || existsSync(FAILURE_MARKER);
+if (!needsRetrigger) {
+  console.log("[deploy:data] using scheduled validated transit.sqlite");
   process.exit(0);
 }
 
-let marker: FailureMarker = {};
-try {
-  marker = await Bun.file(FAILURE_MARKER).json() as FailureMarker;
-} catch (error) {
-  console.warn(`[deploy:data] could not parse transit failure marker: ${error instanceof Error ? error.message : String(error)}`);
-}
-const failedUnits = Array.isArray(marker.failed_timetable_units) ? marker.failed_timetable_units : [];
-
-if (
-  existsSync(PENDING)
-  && failedUnits.length > 0
-  && Bun.env.KRIC_API_KEY?.trim()
-) {
-  console.log(`[deploy:data] retrying only ${failedUnits.length} KRIC timetable units that remained unresolved in CI`);
-  const repairEnv = {
-    TRANSIT_DB_PATH: "data/transit.pending.sqlite",
-    TRANSIT_FAILURE_MARKER: "data/transit-refresh-failure.json",
-    TRANSIT_BUILD_KRIC_RETRIES: "10",
-    TRANSIT_BUILD_HTTP_TIMEOUT_MS: "30000",
-    TRANSIT_BUILD_KRIC_HTTP_CONCURRENCY: "12",
-    TRANSIT_DEPLOY_REPAIR_CONCURRENCY: "8",
-  };
-  const repaired = await run(["bun", "run", "scripts/repair-transit-pending.ts"], repairEnv);
-  if (repaired && await validate("data/transit.pending.sqlite", true)) {
+if (Bun.env.KRIC_API_KEY?.trim()) {
+  console.log("[deploy:data] scheduled live refresh is missing/stale; retriggering one complete KRIC-first live build");
+  if (await build("live", true)) {
     rmSync(DB, { force: true });
-    renameSync(PENDING, DB);
+    renameSync(CANDIDATE, DB);
     rmSync(FAILURE_MARKER, { force: true });
-    console.log("[deploy:data] deploy-time targeted KRIC repair succeeded; pending live SQLite promoted");
+    console.log("[deploy:data] complete deploy-time KRIC retrigger succeeded");
     process.exit(0);
   }
-  console.warn("[deploy:data] unresolved KRIC units remain after deploy-time 10-retry recovery; preserving fallback/LKG SQLite");
-} else if (failedUnits.length > 0 && !Bun.env.KRIC_API_KEY?.trim()) {
-  console.warn("[deploy:data] KRIC_API_KEY is unavailable at deploy; preserving fallback/LKG SQLite");
+  cleanupCandidate();
+  console.warn("[deploy:data] complete deploy-time KRIC retrigger failed after per-request retries; using validated LKG/fallback data");
 } else {
-  console.warn("[deploy:data] no retryable pending KRIC units are available; preserving fallback/LKG SQLite");
+  console.warn("[deploy:data] KRIC_API_KEY unavailable at deploy; using validated LKG/fallback data");
 }
 
 if (existsSync(DB)) {
-  if (!await validate("data/transit.sqlite", false)) throw new Error("existing fallback/LKG transit SQLite failed validation");
-  console.log("[deploy:data] fallback/LKG SQLite ready");
+  if (!await validate("data/transit.sqlite", false)) throw new Error("existing LKG/fallback transit SQLite failed validation");
+  console.log("[deploy:data] validated LKG/fallback SQLite ready");
   process.exit(0);
 }
 
-console.warn("[deploy:data] no fallback/LKG SQLite exists; building deterministic fallback data");
-if (!await buildFixtureFallback()) throw new Error("deploy transit fallback build failed");
-console.log("[deploy:data] fallback SQLite ready");
+console.warn("[deploy:data] no LKG SQLite exists; building deterministic fixture fallback");
+if (!await build("fixture", false)) throw new Error("deploy transit fixture fallback build failed");
+rmSync(DB, { force: true });
+renameSync(CANDIDATE, DB);
+console.log("[deploy:data] deterministic fixture fallback SQLite ready");
