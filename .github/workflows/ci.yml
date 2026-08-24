@@ -4,6 +4,9 @@ on:
   push:
   pull_request:
 
+permissions:
+  contents: write
+
 jobs:
   verify:
     runs-on: ubuntu-latest
@@ -22,3 +25,97 @@ jobs:
       - run: bun run scripts/promote-static.ts
       - run: bun run verify:pwa
       - run: bun run verify:aot
+
+  live-transit-bootstrap:
+    if: github.event_name == 'pull_request' && github.event.pull_request.head.ref == 'feat/sqlite-transit-data'
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    env:
+      KRIC_API_KEY: ${{ secrets.KRIC_API_KEY }}
+      TRANSIT_BUILD_CONCURRENCY: "24"
+      TRANSIT_BUILD_HTTP_TIMEOUT_MS: "5000"
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: feat/sqlite-transit-data
+          fetch-depth: 0
+      - name: Check bootstrap marker
+        id: marker
+        shell: bash
+        run: |
+          if [ -f .github/LIVE_TRANSIT_BOOTSTRAP ]; then
+            echo "run=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "run=false" >> "$GITHUB_OUTPUT"
+          fi
+      - uses: oven-sh/setup-bun@v2
+        if: steps.marker.outputs.run == 'true'
+        with:
+          bun-version-file: .bun-version
+      - name: Install dependencies
+        if: steps.marker.outputs.run == 'true'
+        run: bun install --frozen-lockfile
+      - name: Require KRIC credential
+        if: steps.marker.outputs.run == 'true'
+        run: test -n "$KRIC_API_KEY"
+      - name: Build live or bootstrap backup SQLite
+        if: steps.marker.outputs.run == 'true'
+        id: build
+        shell: bash
+        run: |
+          set +e
+          TRANSIT_DATA_MODE=live timeout --signal=TERM --kill-after=30s 12m bun run build:data 2>&1 | tee /tmp/transit-live.log
+          live_rc=${PIPESTATUS[0]}
+          set -e
+          source=live
+          if [ "$live_rc" -ne 0 ]; then
+            source=fallback
+            TRANSIT_DATA_MODE=fixture bun run build:data
+          fi
+          echo "source=$source" >> "$GITHUB_OUTPUT"
+          if [ "$source" = "fallback" ]; then
+            python3 - <<'PY'
+          import json, re
+          from pathlib import Path
+          lines = Path('/tmp/transit-live.log').read_text(errors='replace').splitlines()
+          safe = []
+          for line in lines:
+              if '[build:data]' not in line and 'KRIC' not in line and '시간표' not in line and 'Error' not in line:
+                  continue
+              safe.append(re.sub(r'(serviceKey=)[^&\s]+', r'\1REDACTED', line)[:1000])
+          Path('data/transit-refresh-failure.json').write_text(json.dumps({
+              'type': 'transit_refresh_failure',
+              'fallback': 'fixture',
+              'log_tail': safe[-100:],
+          }, ensure_ascii=False, indent=2) + '\n')
+          PY
+          else
+            rm -f data/transit-refresh-failure.json
+          fi
+      - name: Validate bootstrap database
+        if: steps.marker.outputs.run == 'true'
+        run: |
+          bun run doctor
+          bun run audit:transfers
+          bun test tests/engine/data-repository.test.ts tests/engine/rapid-service.test.ts tests/engine/transfer-policy.test.ts
+      - name: Commit database and consume marker
+        if: steps.marker.outputs.run == 'true'
+        shell: bash
+        run: |
+          rm -f .github/LIVE_TRANSIT_BOOTSTRAP
+          git add -A .github/LIVE_TRANSIT_BOOTSTRAP
+          git add -f data/transit.sqlite
+          if [ -f data/transit-refresh-failure.json ]; then
+            git add -f data/transit-refresh-failure.json
+          else
+            git rm -f --ignore-unmatch data/transit-refresh-failure.json >/dev/null 2>&1 || true
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          if [ "${{ steps.build.outputs.source }}" = "live" ]; then
+            message="data: refresh KRIC transit SQLite [skip ci]"
+          else
+            message="data: bootstrap fallback transit SQLite [skip ci]"
+          fi
+          git commit -m "$message"
+          git push origin HEAD:feat/sqlite-transit-data
