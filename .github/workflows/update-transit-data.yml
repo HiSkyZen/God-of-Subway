@@ -1,6 +1,5 @@
 name: Transit Data Update
 
-# Secret-enabled live verification marker: 2026-08-24T06:33Z.
 on:
   schedule:
     # 03:00 Asia/Seoul = 18:00 UTC on the previous date.
@@ -8,6 +7,7 @@ on:
   workflow_dispatch:
   push:
     branches:
+      - dev/ts-bun
       - feat/sqlite-transit-data
     paths:
       - .github/workflows/update-transit-data.yml
@@ -25,11 +25,12 @@ concurrency:
 jobs:
   refresh:
     runs-on: ubuntu-latest
-    timeout-minutes: 45
+    timeout-minutes: 25
     env:
       KRIC_API_KEY: ${{ secrets.KRIC_API_KEY }}
       TRANSIT_DATA_MODE: live
-      TRANSIT_BUILD_CONCURRENCY: "16"
+      TRANSIT_BUILD_CONCURRENCY: "24"
+      TRANSIT_BUILD_HTTP_TIMEOUT_MS: "5000"
     steps:
       - uses: actions/checkout@v5
         with:
@@ -51,26 +52,83 @@ jobs:
       - name: Install dependencies
         run: bun install --frozen-lockfile
 
-      - name: Build new SQLite from KRIC
-        run: bun run build:data
+      - name: Build KRIC-first SQLite with bounded backup
+        id: build
+        shell: bash
+        run: |
+          set +e
+          timeout --signal=TERM --kill-after=30s 12m bun run build:data 2>&1 | tee /tmp/transit-live.log
+          live_rc=${PIPESTATUS[0]}
+          set -e
 
-      - name: Validate generated database
+          source=live
+          if [ "$live_rc" -ne 0 ]; then
+            if [ -f data/transit.sqlite ]; then
+              source=previous
+              echo "::warning::KRIC refresh failed or exceeded 12 minutes; preserving last-known-good SQLite."
+            else
+              source=fallback
+              echo "::warning::Initial KRIC refresh failed or exceeded 12 minutes; bootstrapping deterministic backup SQLite."
+              TRANSIT_DATA_MODE=fixture bun run build:data
+            fi
+          fi
+          echo "source=$source" >> "$GITHUB_OUTPUT"
+          echo "live_rc=$live_rc" >> "$GITHUB_OUTPUT"
+
+          if [ "$source" = "live" ]; then
+            rm -f data/transit-refresh-failure.json
+          else
+            python3 - "$source" <<'PY'
+          import json, re, sys
+          from pathlib import Path
+          source = sys.argv[1]
+          lines = Path('/tmp/transit-live.log').read_text(errors='replace').splitlines()
+          keep = []
+          for line in lines:
+              if '[build:data]' not in line and 'KRIC' not in line and '시간표' not in line and 'Error' not in line:
+                  continue
+              line = re.sub(r'(serviceKey=)[^&\s]+', r'\1REDACTED', line)
+              keep.append(line[:1000])
+          Path('data').mkdir(exist_ok=True)
+          Path('data/transit-refresh-failure.json').write_text(json.dumps({
+              'type': 'transit_refresh_failure',
+              'fallback': source,
+              'log_tail': keep[-100:],
+          }, ensure_ascii=False, indent=2) + '\n')
+          PY
+          fi
+
+      - name: Validate selected database
         run: |
           bun run doctor
           bun run audit:transfers
           bun test tests/engine/data-repository.test.ts tests/engine/rapid-service.test.ts tests/engine/transfer-policy.test.ts
 
-      - name: Commit only a validated changed database
+      - name: Commit validated database
         shell: bash
         run: |
-          # A failed build/validation never reaches this step, so the last known-good
-          # repository SQLite remains untouched.
           git add -f data/transit.sqlite
-          if git diff --cached --quiet -- data/transit.sqlite; then
-            echo "transit.sqlite is unchanged"
+          if [ -f data/transit-refresh-failure.json ]; then
+            git add -f data/transit-refresh-failure.json
+          else
+            git rm -f --ignore-unmatch data/transit-refresh-failure.json >/dev/null 2>&1 || true
+          fi
+          if git diff --cached --quiet; then
+            echo "transit data is unchanged"
             exit 0
           fi
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git commit -m "data: refresh KRIC transit SQLite [skip ci]"
+          case "${{ steps.build.outputs.source }}" in
+            live) message="data: refresh KRIC transit SQLite [skip ci]" ;;
+            fallback) message="data: bootstrap fallback transit SQLite [skip ci]" ;;
+            *) message="data: preserve transit SQLite after KRIC refresh failure [skip ci]" ;;
+          esac
+          git commit -m "$message"
           git push origin "HEAD:${GITHUB_REF_NAME}"
+
+      - name: Report stale or fallback refresh
+        if: steps.build.outputs.source != 'live'
+        run: |
+          echo "KRIC live refresh did not replace the database; validated backup/last-known-good data was preserved." >&2
+          exit 1
