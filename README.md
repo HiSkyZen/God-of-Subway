@@ -1,58 +1,53 @@
-# 지금타 (God-of-Subway, Bun/TypeScript)
+# 지금타 (God-of-Subway)
 
-수도권 전철의 **빌드 시 생성 SQLite 시간표**, 서울시 실시간 열차 위치, 환승 동선 데이터를 결합해 도착시각 기준 경로를 계산하는 Bun + TypeScript 서비스입니다. `unending314/God-of-Subway` Python/FastAPI 구현을 Bun 런타임으로 이식한 다운스트림입니다.
+수도권 전철의 SQLite 시간표, 실시간 열차 위치, 환승 동선을 결합해 **실제 도착시각 기준 경로**를 계산하는 Bun + TypeScript PWA입니다.
 
 ## 지원 범위
 
-- 실시간 + 시간표: 1~9호선, 경의중앙선, 공항철도, 경춘선, 수인분당선, 신분당선, 경강선, 서해선, GTX-A
+- 실시간 + 시간표: 1~9호선, 경의중앙선, 공항철도 일반열차, 경춘선, 수인분당선, 신분당선, 경강선, 서해선, GTX-A
 - 시간표: 인천1·2호선, 용인에버라인, 의정부경전철, 우이신설선, 신림선, 김포골드라인
-- `DAY/SAT/END` 독립 시간표와 일반/급행 서비스 구분, 실시간 장애 시 시간표 fallback
-- 공항철도 직통열차는 도시철도 급행/완행 비교 대상과 생성 시간표에서 제외하고 일반 공항철도 열차만 사용
-- 환승 거리·시간·방향별 빠른 환승 위치, 동명이의역 분리, 공용선로/승강장 예외 정책
-- React PWA UI, 여정 추적, 즐겨찾기, 실험 기록, 푸시 알림
+- 경로 목적: **최단시간 / 최소환승 / 최소비용**
+- GTX 사용 토글: 기본 ON. GTX 전용 목적지에는 필요한 section만 유지할 수 있습니다.
+- 공항철도 직통열차는 도시철도 경로/급행 비교 대상에서 제외합니다.
 
 ## 데이터 아키텍처
 
-기존 `data/*.json` 시간표/그래프/환승 런타임 의존성은 제거했습니다. 사람이 검토할 수 있는 코드/매핑/환승 원천은 `datasets/*.tsv`로 정리하고, 대용량 시간표는 저장소에 복제하지 않습니다.
+런타임은 JSON/CSV 시간표를 읽지 않고 `data/transit.sqlite`만 사용합니다. SQLite는 매일 **03:00 KST** GitHub Actions가 KRIC 시간표를 우선 수집해 검증한 뒤 갱신합니다. Vercel 배포는 DB를 새로 만들지 않고 검증된 SQLite를 패키징해 읽습니다.
 
-프로덕션 `bun run build:data`는 KRIC OpenAPI에서 시간표/환승을 받아 `data/transit.sqlite`를 생성합니다. 런타임은 `bun:sqlite`로 이 DB만 읽습니다. 서울 실시간 위치 API는 별도 네트워크 계층입니다.
+KRIC 시간표는 `dayCd=8`(평일), `dayCd=9`(주말·공휴일)만 조회하며 토요일은 `dayCd=9` 결과를 사용합니다. `dayCd=7`은 조회하지 않습니다.
 
-환승은 제공된 서울교통공사 거리/시간 데이터를 우선 사용하고, 해당 데이터에 없는 환승쌍만 KRIC `stationTransferInfo`의 거리를 사용해 `round(distance_m / 1.2)`초로 계산합니다.
+환승시간은 서울교통공사 authoritative 데이터가 우선이고 없는 pair만 upstream 검증값으로 보완합니다. KRIC `stationTransferInfo`의 거리값은 환승시간 계산에 사용하지 않습니다. KRIC에서는 위치 관련 raw hint만 낮은 우선순위로 보존합니다.
 
-자세한 스키마와 출처 정책은 [`docs/SQLITE_TRANSIT_DATA.md`](docs/SQLITE_TRANSIT_DATA.md), 데이터셋 설명은 [`datasets/README.md`](datasets/README.md)를 참고하십시오.
+역 좌표는 예상 운임거리 계산에만 사용하며 환승 보행시간 추산에는 사용하지 않습니다.
 
-## 빠른 시작
+자세한 내용:
+- [`docs/SQLITE_TRANSIT_DATA.md`](docs/SQLITE_TRANSIT_DATA.md)
+- [`docs/TRANSFERS.md`](docs/TRANSFERS.md)
+- [`docs/DEPLOYMENT.md`](docs/DEPLOYMENT.md)
+
+## 개발
 
 ```bash
 bun install
-TRANSIT_DATA_MODE=fixture bun run build:data   # 외부 API 없는 개발/테스트 DB
+TRANSIT_DATA_MODE=fixture bun run build:data
 bun run check
 bun run dev
 ```
 
-실데이터 빌드는 환경변수 `KRIC_API_KEY`가 필요합니다. 실시간 서울 지하철 위치는 `SEOUL_API_KEY`를 사용합니다. 실제 키를 저장소·로그·DB 메타데이터에 기록하지 마십시오.
+외부 KRIC live DB를 수동 생성하려면 `KRIC_API_KEY`가 필요합니다.
 
 ```bash
-bun run build:data       # production/live KRIC build
-bun run build
-bun run build:client
-bun run scripts/promote-static.ts
+TRANSIT_DATA_MODE=live bun run build:data
+bun run doctor
+bun run audit:transfers
 ```
 
-Vercel의 `build:all`은 데이터 DB 생성을 포함합니다.
+실제 키는 저장소·로그·SQLite metadata에 기록하지 않습니다.
 
-## 저장소 구조
+## 빌드
 
-```text
-api/          Vercel Function 진입점
-src/
-  api/        HTTP 계약과 핸들러
-  client/     React PWA UI
-  engine/     시간표, 실시간 ETA, 라우팅, 환승/급행 정책
-  infra/      SQLite 스키마, 캐시, 관측성, 푸시
-datasets/     사람이 읽을 수 있는 KRIC 코드/매핑/환승 TSV 원천
-data/         빌드 시 생성되는 transit.sqlite (Git 미추적)
-scripts/      DB 생성·빌드·검증·감사 도구
-tests/        API·클라이언트·엔진 테스트
-docs/         설계·운영 문서
+```bash
+bun run build:all
 ```
+
+`build:all`은 서버/클라이언트/PWA만 빌드하며 **데이터 DB를 생성하지 않습니다**. 배포는 이미 검증된 `data/transit.sqlite`를 사용합니다.
