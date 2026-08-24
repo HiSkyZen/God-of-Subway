@@ -1,68 +1,38 @@
-# 환승 데이터와 물리 환승 정책
+# Transfer Data Policy
 
-## 데이터 우선순위
+## 시간/거리 우선순위
 
-런타임은 레거시 환승 JSON을 읽지 않습니다. SQLite에는 환승 **토폴로지와 서울교통공사 원천**을 저장하고, 서울교통공사에 없는 KRIC 거리는 실제 경로 계산 시 필요한 pair만 조회합니다.
+1. 서울교통공사 환승거리·소요시간 데이터
+2. upstream에서 검증된 fallback pair
+3. 그래도 없는 pair는 보수적 topology fallback
 
-1. 물리 승강장 오버라이드 (`src/engine/transfer-policy.ts`)
-2. `datasets/transfers/seoul-metro-transfer-times.tsv`의 서울교통공사 2025-12-31 방향별 거리/시간
-3. KRIC `convenientInfo/stationTransferInfo` 런타임 거리 조회
-4. KRIC 조회가 불가능할 때의 명시적 추정/placeholder 정책
+서울교통공사 row는 fallback이 덮어쓰지 않습니다. 물리역에 논리 노선이 `n`개면 unordered 환승쌍은 정확히 `n*(n-1)/2`개여야 합니다. SQLite는 routing을 위해 directed row를 가질 수 있습니다.
 
-서울교통공사 값은 KRIC가 덮어쓰지 않습니다. KRIC `chtnDst`를 사용한 경우 환승시간은 정확히 다음과 같습니다.
+KRIC `stationTransferInfo`의 거리값 및 역사 좌표는 **환승시간 계산에 사용하지 않습니다**. 미확인 pair는 JSON diagnostic으로 빌드 로그에 기록하지만 빌드를 실패시키지 않습니다.
 
-```text
-seconds = round(chtnDst_m / 1.2)
-```
+## 위치정보 우선순위
 
-과거 `distance / 1.1m/s + 25초`, `240→247초` 같은 별도 보정은 사용하지 않습니다.
+1. 서울교통공사 방향별 빠른 환승 정보
+2. 국토교통부 빠른 환승 위치
+3. upstream 검증 위치
+4. 국가철도공단/KRIC 정적 위치자료
+5. KRIC live `stLocCont` / `clsLocCont` raw hint
 
-## 한 역의 환승 pair 수: nC2
+KRIC 위치 문자열은 비정형이므로 의미를 과도하게 추론하지 않습니다. 확실하게 파싱 가능한 호차/문 정도만 낮은 우선순위 hint로 사용할 수 있습니다.
 
-환승거리는 “역당 하나”가 아니라 **물리 역의 노선쌍마다 하나**입니다. 한 물리 역에 서로 환승 가능한 논리 노선이 `n`개이면 서로 다른 unordered pair 수는 다음과 같습니다.
+## 동일노선 분기
 
-```text
-pair_count = n * (n - 1) / 2
-```
+`from_line == to_line`이라고 해서 0초 환승으로 간주하지 않습니다. 가좌, 성수, 신도림, 구로, 금천구청, 병점 등은 실제 계통·승강장 변경 여부를 확인합니다. 한 열차가 그대로 through-running하는 경우에만 가짜 환승을 생성하지 않습니다.
 
-예를 들어 2개 노선은 1개, 3개 노선은 3개, 4개 노선은 6개의 물리 환승 pair를 가집니다.
+## 공용선로
 
-빌드 시 `station_id`별 논리 노선을 그룹화해 정확히 nC2 토폴로지를 생성합니다. SQLite `transfer_pair`는 경로 탐색을 위해 방향별 row를 가지므로 하나의 unordered pair가 최대 두 directed row로 표현됩니다. 서울교통공사 row가 이미 존재하면 유지하고 누락 방향만 `runtime-kric-pending` placeholder로 채웁니다.
+공용선로 전체를 0초로 처리하거나 중간 환승역을 삭제하지 않습니다. 각 역의 물리 이동 최소시간을 후보에 반영하고 **실제 다음 열차 대기시간과 종착/분기 여부**를 timetable에서 평가합니다.
 
-신촌(2호선/경의중앙선), 양평(5호선/경의중앙선)처럼 이름만 같은 별도 물리 역은 서로 다른 `station_id`이므로 nC2 계산에 섞지 않습니다.
+- 경의중앙↔서해: 일산/풍산/백마/곡산은 공유 승강장 성격, 대곡은 방향에 따라 평면환승 가능, 능곡은 승강장 분리
+- 4호선↔수인분당: 한대앞 등 공유구간은 편리할 수 있으나 안산 종착·오이도 시종착/착발 순서를 실제 시간표로 평가
 
-## KRIC 런타임 조회
-
-배포 시 `stationTransferInfo`를 전수 호출하지 않습니다. 경로 후보에 실제로 등장한 `역 + 노선 A + 노선 B` pair가 `runtime-kric-pending`일 때만 다음 순서로 처리합니다.
-
-1. SQLite의 해당 `station_id`에서 운영기관/노선/역 코드를 찾습니다.
-2. KRIC `stationTransferInfo`를 호출합니다.
-3. 응답의 `chtnLn`을 대상 노선에 매칭하고 해당 pair의 `chtnDst`만 사용합니다.
-4. 같은 pair에 여러 거리 row가 있으면 중앙값을 사용합니다.
-5. `round(chtnDst / 1.2)`를 계산해 현재 Function 인스턴스의 transfer pair를 갱신합니다.
-6. Valkey/메모리 캐시에 저장해 같은 pair의 반복 API 호출을 피합니다.
-
-한 역에 여러 환승 노선이 있어도 하나의 역 대표 거리로 합치지 않습니다. 캐시 키 역시 `station_id + 정렬된 두 노선`의 unordered pair 단위입니다.
-
-KRIC 장애나 미설정 시에는 cached stale 값이 있으면 사용하고, 없으면 DB의 보수적 placeholder/모델값으로 경로 계산을 계속합니다.
-
-## 공용선로와 제자리 환승
-
-현재 서비스에서 별도 물리 정책을 적용하는 핵심 공용선로는 다음과 같습니다.
-
-- 경의중앙선 ↔ 경춘선: 청량리–상봉
-- 경의중앙선 ↔ 수인분당선: 청량리–왕십리
-- 4호선 ↔ 수인분당선: 한대앞–오이도
-- 경의중앙선 ↔ 서해선: 대곡–일산
-
-동일 방향 동일 승강장 면처럼 검증된 경우에만 0초 제자리 환승을 허용합니다. 대곡·능곡 등 승강장이 분리된 역은 공용선로라는 이유만으로 0초가 되지 않습니다. 이러한 물리 override는 일반 KRIC 거리보다 우선합니다.
+A→B→A처럼 같은 두 노선을 짧은 구간에서 왕복 전환하는 topology artifact만 제거합니다.
 
 ## 검증
 
-`build:data`, `doctor`, `audit:transfers`는 다음을 검사합니다.
-
-- 서울교통공사 row가 보존되는지
-- deploy-time KRIC 환승거리 row가 0건인지
-- 물리 역별 unordered pair 수가 정확히 nC2인지
-- `runtime-kric-pending`이 유효한 directed routing row인지
-- 공항철도 직통 또는 동명이의역 금지 연결이 환승 토폴로지에 섞이지 않는지
+`bun run doctor`와 `bun run audit:transfers`는 SQLite 무결성/FK, 서울교통공사 authoritative row, nC2 mismatch 0, KRIC 거리 기반 환승시간 row 0, 누락 pair diagnostic, 공항철도 직통 제외를 확인합니다.
