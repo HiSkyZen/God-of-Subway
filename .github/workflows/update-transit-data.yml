@@ -1,5 +1,6 @@
 name: Transit Data Update
 
+# Final bounded live verification trigger: 2026-08-24.
 on:
   schedule:
     # 03:00 Asia/Seoul = 18:00 UTC on the previous date.
