@@ -29,11 +29,12 @@ jobs:
   live-transit-bootstrap:
     if: github.event_name == 'pull_request' && github.event.pull_request.head.ref == 'feat/sqlite-transit-data'
     runs-on: ubuntu-latest
-    timeout-minutes: 25
+    timeout-minutes: 45
     env:
       KRIC_API_KEY: ${{ secrets.KRIC_API_KEY }}
-      TRANSIT_BUILD_CONCURRENCY: "24"
-      TRANSIT_BUILD_HTTP_TIMEOUT_MS: "5000"
+      TRANSIT_BUILD_CONCURRENCY: "96"
+      TRANSIT_BUILD_HTTP_TIMEOUT_MS: "15000"
+      TRANSIT_BUILD_KRIC_RETRIES: "10"
     steps:
       - uses: actions/checkout@v6
         with:
@@ -64,7 +65,7 @@ jobs:
         shell: bash
         run: |
           set +e
-          TRANSIT_DATA_MODE=live timeout --signal=TERM --kill-after=30s 12m bun run build:data 2>&1 | tee /tmp/transit-live.log
+          TRANSIT_DATA_MODE=live timeout --signal=TERM --kill-after=30s 25m bash -c 'set -e; bun run build:data; bun run scripts/verify-live-transit.ts' 2>&1 | tee /tmp/transit-live.log
           live_rc=${PIPESTATUS[0]}
           set -e
           source=live
@@ -86,6 +87,9 @@ jobs:
           Path('data/transit-refresh-failure.json').write_text(json.dumps({
               'type': 'transit_refresh_failure',
               'fallback': 'fixture',
+              'timetable_retries': 10,
+              'concurrency': 96,
+              'retry_delay_ms': 0,
               'log_tail': safe[-100:],
           }, ensure_ascii=False, indent=2) + '\n')
           PY
@@ -97,7 +101,7 @@ jobs:
         run: |
           bun run doctor
           bun run audit:transfers
-          bun test tests/engine/data-repository.test.ts tests/engine/rapid-service.test.ts tests/engine/transfer-policy.test.ts
+          bun test
       - name: Commit database and consume marker
         if: steps.marker.outputs.run == 'true'
         shell: bash
