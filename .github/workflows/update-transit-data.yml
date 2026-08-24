@@ -1,6 +1,5 @@
 name: Transit Data Update
 
-# Final bounded live verification trigger: 2026-08-24.
 on:
   schedule:
     # 03:00 Asia/Seoul = 18:00 UTC on the previous date.
@@ -26,12 +25,13 @@ concurrency:
 jobs:
   refresh:
     runs-on: ubuntu-latest
-    timeout-minutes: 25
+    timeout-minutes: 45
     env:
       KRIC_API_KEY: ${{ secrets.KRIC_API_KEY }}
       TRANSIT_DATA_MODE: live
-      TRANSIT_BUILD_CONCURRENCY: "24"
-      TRANSIT_BUILD_HTTP_TIMEOUT_MS: "5000"
+      TRANSIT_BUILD_CONCURRENCY: "96"
+      TRANSIT_BUILD_HTTP_TIMEOUT_MS: "15000"
+      TRANSIT_BUILD_KRIC_RETRIES: "10"
     steps:
       - uses: actions/checkout@v5
         with:
@@ -58,7 +58,7 @@ jobs:
         shell: bash
         run: |
           set +e
-          timeout --signal=TERM --kill-after=30s 12m bun run build:data 2>&1 | tee /tmp/transit-live.log
+          timeout --signal=TERM --kill-after=30s 25m bash -c 'set -e; bun run build:data; bun run scripts/verify-live-transit.ts' 2>&1 | tee /tmp/transit-live.log
           live_rc=${PIPESTATUS[0]}
           set -e
 
@@ -66,10 +66,10 @@ jobs:
           if [ "$live_rc" -ne 0 ]; then
             if [ -f data/transit.sqlite ]; then
               source=previous
-              echo "::warning::KRIC refresh failed or exceeded 12 minutes; preserving last-known-good SQLite."
+              echo "::warning::KRIC refresh failed after 10 no-delay retries; preserving last-known-good SQLite for this scheduled run."
             else
               source=fallback
-              echo "::warning::Initial KRIC refresh failed or exceeded 12 minutes; bootstrapping deterministic backup SQLite."
+              echo "::warning::Initial KRIC refresh failed after 10 no-delay retries; bootstrapping deterministic backup SQLite."
               TRANSIT_DATA_MODE=fixture bun run build:data
             fi
           fi
@@ -94,6 +94,9 @@ jobs:
           Path('data/transit-refresh-failure.json').write_text(json.dumps({
               'type': 'transit_refresh_failure',
               'fallback': source,
+              'timetable_retries': 10,
+              'concurrency': 96,
+              'retry_delay_ms': 0,
               'log_tail': keep[-100:],
           }, ensure_ascii=False, indent=2) + '\n')
           PY
@@ -103,7 +106,7 @@ jobs:
         run: |
           bun run doctor
           bun run audit:transfers
-          bun test tests/engine/data-repository.test.ts tests/engine/rapid-service.test.ts tests/engine/transfer-policy.test.ts
+          bun test
 
       - name: Commit validated database
         shell: bash
@@ -131,5 +134,5 @@ jobs:
       - name: Report stale or fallback refresh
         if: steps.build.outputs.source != 'live'
         run: |
-          echo "KRIC live refresh did not replace the database; validated backup/last-known-good data was preserved." >&2
+          echo "KRIC live refresh did not replace the database after 10 no-delay retries; validated backup/last-known-good data was preserved and deploy-time recovery will retry KRIC once more." >&2
           exit 1
