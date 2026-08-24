@@ -73,7 +73,6 @@ test("active transfer has a live countdown and visual progress state", () => {
     platformStart: null,
     segments: transferSegments.map(({ line, from, to, transfer_seconds, transfer_walk, transfer_info }) => ({ line, from, to, transfer_seconds, transfer_walk, transfer_info })),
     day: "DAY",
-    baseline: null,
     previousNextTrain: null,
     displaySegments: transferSegments,
     transferEndsAt: localText(new Date(Date.now() + 90_000)),
@@ -104,13 +103,13 @@ test("GTX route exposes a one-click exclusion rerun when an ordinary route is po
   expect(html).toContain("GTX-A 제외하기");
 });
 
-test("GTX-exclusive endpoints never offer an impossible GTX exclusion", () => {
+test("GTX-exclusive endpoints still expose the preference control because required GTX sections are preserved", () => {
   for (const station of ["운정중앙", "킨텍스", "동탄"]) {
     const north = station !== "동탄";
     const gtx: RouteSegment[] = [{ line: north ? "GTX-A(북부)" : "GTX-A(남부)", from: station, to: north ? "서울역" : "수서", train_no: north ? "X1001" : "X0002", tracking_id: north ? "X1001" : "X0002", board_dt: "2026-08-18 23:45:00", alight_dt: "2026-08-18 23:57:00" }];
     const gtxResult: AutoRouteResponse = { ok: true, from: station, to: north ? "서울역" : "수서", arrival_time: "2026-08-18 23:57:00", segments: gtx };
     const html = renderToStaticMarkup(<UpstreamJourneyView result={gtxResult} segments={gtx} arrivalTime={gtxResult.arrival_time} totalSeconds={720} activeIndex={0} liveTrip={null} onBoard={() => undefined} onRefresh={() => undefined} onExcludeGtx={() => undefined} />);
-    expect(html).not.toContain("GTX-A 제외하기");
+    expect(html).toContain("GTX-A 제외하기");
   }
 });
 
@@ -130,7 +129,7 @@ test("tracking notifications accept public labels while storing internal ids", a
   expect(source).toContain("segment?.tracking_id ?? segment?.train_no");
 });
 
-test("app source keeps time controls, tracking guard, theme, favorites, and opt-in experiment panel", async () => {
+test("app source keeps time controls, routing objectives, GTX preference, theme, and favorites", async () => {
   const source = await Bun.file("src/client/app.tsx").text();
   expect(source).toContain("−5분");
   expect(source).toContain("−1분");
@@ -138,8 +137,13 @@ test("app source keeps time controls, tracking guard, theme, favorites, and opt-
   expect(source).toContain("+5분");
   expect(source).toContain("time-picker");
   expect(source).toContain("새 경로를 조회하면 현재 추적이 중단됩니다");
-  expect(source).toContain("excludeGtx: true");
+  expect(source).toContain("useGtx: false");
   expect(source).toContain("◐ 다크");
   expect(source).toContain("favorite-card");
-  expect(source).toContain("experimentOptIn && <ExperimentPanel");
+  expect(source).toContain("최단시간");
+  expect(source).toContain("최소환승");
+  expect(source).toContain("최소비용");
+  expect(source).toContain("GTX 이용");
+  expect(source).not.toContain("ExperimentPanel");
+  expect(source).not.toContain("기말");
 });

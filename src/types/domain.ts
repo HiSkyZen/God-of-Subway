@@ -30,7 +30,7 @@ export interface Path { start: string; end: string; seconds: number; edges: Path
 export interface Diagnostics { positions: number; matched: number; unmatched_train: string[]; unmatched_station: string[]; matched_context?: number; realtime_available?: boolean; realtime_error?: string; realtime_query?: string; cache_state?: string; [key: string]: unknown; }
 export interface PositionCacheEntry { rows: PositionRow[]; error: string; available: boolean; query?: string; cache_state?: string; }
 export type PositionCache = Map<string, PositionCacheEntry | PositionRow[]> | Record<string, PositionCacheEntry | PositionRow[]>;
-export interface CalculateRoutePayload { start_time?: string; day?: string; segments: SegmentInput[]; refresh_only?: boolean; baseline_minutes?: number | string | null; train_delay_cache?: unknown[]; [key: string]: unknown; }
+export interface CalculateRoutePayload { start_time?: string; day?: string; segments: SegmentInput[]; refresh_only?: boolean; train_delay_cache?: unknown[]; [key: string]: unknown; }
 export interface AutoRoutePayload { from: string; to: string; start_time?: string; day?: string; objective?: RouteObjective; use_gtx?: boolean; exclude_gtx?: boolean; [key: string]: unknown; }
 export interface LiveTripPayload { segments: SegmentInput[]; active_index?: number; boarded_train_no?: string; boarded_at?: string; day?: string; [key: string]: unknown; }
 export interface RealtimeResult { ok: boolean; error?: { message?: string } | string | null; data?: RealtimeEnvelope; }

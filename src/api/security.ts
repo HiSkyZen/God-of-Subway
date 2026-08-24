@@ -1,8 +1,8 @@
 export const CONTENT_SECURITY_POLICY = [
   "default-src 'self'",
-  "script-src 'self' https://www.googletagmanager.com",
-  "connect-src 'self' https://www.google-analytics.com https://region1.google-analytics.com https://*.google-analytics.com",
-  "img-src 'self' data: https://www.google-analytics.com https://www.googletagmanager.com",
+  "script-src 'self'",
+  "connect-src 'self'",
+  "img-src 'self' data:",
   "style-src 'self'",
   "font-src 'self'",
   "worker-src 'self'",

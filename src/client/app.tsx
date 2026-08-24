@@ -1,16 +1,13 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import type { FormEvent, ReactElement } from "react";
 import { createRoot, type Root } from "react-dom/client";
-import { initializeAnalytics } from "./analytics";
-import { BellIcon, ExperimentPanel, InstallSheet, LivePanel, PushOptInSheet, ShareIcon, StationInput } from "./components";
+import { BellIcon, InstallSheet, LivePanel, PushOptInSheet, ShareIcon, StationInput } from "./components";
 import { UpstreamJourneyView } from "./journey-view";
 import { useClock, useToast } from "./hooks";
-import { parseServiceModeSelection } from "./pure";
 import { useJourneySearch, type JourneySearchOptions } from "./use-journey-search";
 import { useLiveJourney } from "./use-live-journey";
 import { usePushPwa } from "./use-push-pwa";
 
-initializeAnalytics();
 declare global { interface Window { __jigeumtaReactRoot?: Root; } }
 type Theme = "light" | "dark";
 
@@ -35,10 +32,9 @@ function App(): ReactElement {
   const [toast, notify] = useToast();
   const search = useJourneySearch(notify);
   const push = usePushPwa(notify, "/sw.js");
-  const live = useLiveJourney({ result: search.result, day: search.day, baseline: search.baseline, alert: push.pushAlert, notify, onBoardEvent: search.recordBoardEvent, onEtaEvent: search.recordEtaUpdate, onSyncAlert: push.syncArrivalAlert, onClearAlert: push.clearArrivalAlert });
+  const live = useLiveJourney({ result: search.result, day: search.day, alert: push.pushAlert, notify, onSyncAlert: push.syncArrivalAlert, onClearAlert: push.clearArrivalAlert });
   const inputRef = useRef<HTMLInputElement>(null);
   const [theme, setTheme] = useState<Theme>(initialTheme);
-  const [experimentOptIn, setExperimentOptIn] = useState(() => localStorage.getItem("jigeumta_experiment_enabled") === "1");
   const [debugQuery, setDebugQuery] = useState(() => localStorage.getItem("jigeumta_debug_query") === "1");
 
   useEffect(() => {
@@ -46,10 +42,6 @@ function App(): ReactElement {
     localStorage.setItem("jigeumta_theme", theme);
     document.querySelector('meta[name="theme-color"]')?.setAttribute("content", theme === "dark" ? "#0b1118" : "#ffffff");
   }, [theme]);
-  useEffect(() => {
-    search.setExperimentEnabled(experimentOptIn);
-    localStorage.setItem("jigeumta_experiment_enabled", experimentOptIn ? "1" : "0");
-  }, [experimentOptIn]);
   useEffect(() => { localStorage.setItem("jigeumta_debug_query", debugQuery ? "1" : "0"); }, [debugQuery]);
   useEffect(() => { if (!live.liveTrip || search.result || !live.restoredResult) return; search.restoreTrip(live.liveTrip, live.restoredResult); }, [live.liveTrip?.journeyStartedAt, Boolean(search.result)]);
 
@@ -114,6 +106,11 @@ function App(): ReactElement {
           <label className="selected-time time-picker" aria-label="조회 시각 직접 선택"><span>{timeText(selectedDate)}</span><input type="time" value={timeValue(selectedDate)} onChange={(event) => search.setExactTime(event.target.value)} /></label>
           <span className="time-step-group"><button type="button" onClick={() => shiftSearchTime(1)}>+1분</button><button type="button" onClick={() => shiftSearchTime(5)}>+5분</button></span>
         </div>
+        <div className="route-objective-strip" role="radiogroup" aria-label="경로 최적화 기준">
+          <button type="button" role="radio" aria-checked={search.objective === "fastest"} className={search.objective === "fastest" ? "active" : ""} onClick={() => search.setObjective("fastest")}>최단시간</button>
+          <button type="button" role="radio" aria-checked={search.objective === "fewest_transfers"} className={search.objective === "fewest_transfers" ? "active" : ""} onClick={() => search.setObjective("fewest_transfers")}>최소환승</button>
+          <button type="button" role="radio" aria-checked={search.objective === "lowest_cost"} className={search.objective === "lowest_cost" ? "active" : ""} onClick={() => search.setObjective("lowest_cost")}>최소비용</button>
+        </div>
       </section>
 
       {search.favorites.length > 0 && <section className="favorites-panel" aria-label="즐겨찾기 경로">
@@ -122,21 +119,18 @@ function App(): ReactElement {
       </section>}
 
       {search.showSettings && <section className="settings-panel" aria-label="상세 설정">
-        <label>운행일<select value={search.day} onChange={(event) => search.setDay(parseServiceModeSelection(event.target.value))}><option value="AUTO">자동</option><option value="DAY">평일</option><option value="SAT">토요일</option><option value="END">일요일·공휴일</option></select></label>
-        <label>기존 앱 예상 총시간 · 실험용<input type="number" min={1} value={search.baseline} onChange={(event) => search.setBaseline(event.target.value)} placeholder="예: 62" /></label>
-        <label className="checkbox-label"><input type="checkbox" checked={experimentOptIn} onChange={(event) => setExperimentOptIn(event.target.checked)} /> 기말 시험 기록 활성화</label>
+        <label>운행일<select value={search.day} onChange={(event) => search.setDay(event.target.value === "DAY" ? "DAY" : "END")}><option value="DAY">평일</option><option value="END">주말·공휴일</option></select></label>
         <label className="checkbox-label"><input type="checkbox" checked={debugQuery} onChange={(event) => setDebugQuery(event.target.checked)} /> 디버그모드 조회</label>
+        <label className="checkbox-label"><input type="checkbox" checked={search.useGtx} onChange={(event) => search.setUseGtx(event.target.checked)} /> GTX 이용</label>
       </section>}
 
       {search.error && <p className="error-banner" role="alert"><strong>조회 실패</strong><span>{search.error}</span></p>}
 
-      {search.result ? <UpstreamJourneyView result={search.result} segments={activeSegments} arrivalTime={arrivalTime} totalSeconds={totalSeconds} activeIndex={live.liveTrip?.activeIndex ?? 0} liveTrip={visibleTrip} onBoard={live.startTracking} onRefresh={() => void refreshJourney()} onExcludeGtx={() => void runSearch(undefined, undefined, { excludeGtx: true })} /> : <section className="empty-state"><h1>출발역과 도착역만 입력하세요.</h1><p>현재 운행 중인 열차 위치와 실제 환승 소요시간을 반영해 최종 도착 시각을 계산합니다.</p></section>}
+      {search.result ? <UpstreamJourneyView result={search.result} segments={activeSegments} arrivalTime={arrivalTime} totalSeconds={totalSeconds} activeIndex={live.liveTrip?.activeIndex ?? 0} liveTrip={visibleTrip} onBoard={live.startTracking} onRefresh={() => void refreshJourney()} onExcludeGtx={() => void runSearch(undefined, undefined, { useGtx: false })} /> : <section className="empty-state"><h1>출발역과 도착역만 입력하세요.</h1><p>현재 운행 중인 열차 위치와 실제 환승 소요시간을 반영해 최종 도착 시각을 계산합니다.</p></section>}
 
       {live.liveTrip && <LivePanel trip={live.liveTrip} result={live.liveResult} alertActive={Boolean(push.pushAlert && !push.pushAlert.pending_cancel)} arrivalAlertCapable={push.arrivalAlertCapable} onAlert={() => void push.registerArrivalAlert(live.liveTrip)} onClearAlert={() => void push.clearArrivalAlert()} onFinishTransfer={() => void live.finishTransfer()} onAlight={live.handleAlight} onStop={live.stopTracking} />}
 
       {search.result && <div className="bottom-actions"><button type="button" className="favorite-save" onClick={search.saveFavorite}>☆ 이 경로 즐겨찾기</button><button type="button" className="share-route" onClick={() => void shareRoute()}><ShareIcon /> <span>경로 공유</span></button><span className="tool-spacer" /><button type="button" className="refresh-route" onClick={() => void refreshJourney()}>현재 정보로 다시 계산</button></div>}
-
-      {experimentOptIn && <ExperimentPanel experiments={search.experiments} onArrive={search.arriveExperiment} onUpdate={search.updateExperiment} onDelete={search.deleteExperiment} onCsv={() => search.exportExperiments("csv")} onJson={() => search.exportExperiments("json")} />}
     </main>
 
     <footer className="app-footer">실시간 정보는 교통상황 및 열차운행에 따라 변경될 수 있습니다. <span>정보 출처 · 서울특별시 열린데이터광장 및 노선별 시간표 데이터</span></footer>

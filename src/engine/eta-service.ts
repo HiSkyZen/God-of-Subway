@@ -647,11 +647,6 @@ export async function calculateRoute(payload: CalculateRoutePayload, positionCac
     ready = new Date(result.chosen.alight_dt.getTime() + (index < segments.length - 1 ? transfer * 1000 : 0));
   }
   const end = results[results.length - 1].alight_dt as Date;
-  let baseline: number | null = null;
-  if (payload.baseline_minutes !== "" && payload.baseline_minutes !== null && payload.baseline_minutes !== undefined) {
-    const parsed = Number(payload.baseline_minutes);
-    if (Number.isFinite(parsed)) baseline = parsed;
-  }
   return {
     ok: true,
     service_mode: mode,
@@ -661,8 +656,6 @@ export async function calculateRoute(payload: CalculateRoutePayload, positionCac
     refresh_only: refresh,
     arrival_time: formatKst(end),
     total_seconds: round((end.getTime() - start.getTime()) / 1000),
-    baseline_minutes: baseline,
-    difference_seconds: baseline === null ? null : round((end.getTime() - start.getTime()) / 1000 - baseline * 60),
     segments: results.map(serializeSegment),
     warnings,
   };

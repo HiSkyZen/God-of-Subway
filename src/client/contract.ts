@@ -1,5 +1,7 @@
 /** Client-owned wire contracts. Field names intentionally mirror the Python API. */
 export type ServiceMode = "AUTO" | "DAY" | "SAT" | "END";
+export type ClientServiceDay = "DAY" | "END";
+export type RouteObjective = "fastest" | "fewest_transfers" | "lowest_cost";
 export type Confidence = "높음" | "중간" | "낮음" | string;
 
 export interface TransferInfo {
@@ -46,7 +48,6 @@ export interface RouteSegment extends RouteSegmentInput {
 
 export interface RouteRequest {
   start_time: string;
-  baseline_minutes?: string | number | null;
   day: ServiceMode;
   segments: RouteSegmentInput[];
   refresh_only?: boolean;
@@ -56,8 +57,9 @@ export interface AutoRouteRequest {
   from: string;
   to: string;
   start_time: string;
-  baseline_minutes?: string | number | null;
   day: ServiceMode;
+  objective?: RouteObjective;
+  use_gtx?: boolean;
   exclude_gtx?: boolean;
 }
 
@@ -67,7 +69,6 @@ export interface TripUpdateRequest {
   boarded_train_no: string;
   boarded_at: string | null;
   day: ServiceMode;
-  baseline_minutes?: string | number | null;
 }
 
 export interface ApiEnvelope {
@@ -173,59 +174,6 @@ export interface FavoriteRoute {
   day: ServiceMode;
 }
 
-export interface BoardEvent {
-  at: string;
-  segment_index: number;
-  line: string;
-  from: string;
-  to: string;
-  boarded_train_no: string;
-  recommended_train_no: string;
-  matches_recommendation: boolean;
-  recommendation_confidence: Confidence;
-  recommendation_delay_seconds: number;
-  recommendation_eta: string;
-}
-
-export interface EtaEvent {
-  at: string;
-  kind: string;
-  eta: string;
-  remaining_seconds: number;
-  quality: Confidence;
-  segments: RouteSegment[];
-}
-
-export interface ExperimentRecord {
-  id: string;
-  fingerprint: string;
-  created_at: string;
-  completed_at: string | null;
-  excluded: boolean;
-  from: string;
-  to: string;
-  planned_platform_arrival: string;
-  day_requested: ServiceMode;
-  service_mode: string;
-  service_mode_reason: string;
-  route_segments: RouteSegmentInput[];
-  route_text: string;
-  transfer_count: number;
-  baseline_minutes: number | null;
-  baseline_arrival: string | null;
-  initial_eta: string | null;
-  initial_total_seconds: number | null;
-  initial_quality: Confidence;
-  initial_predictions: RouteSegment[];
-  last_eta: string | null;
-  final_eta?: string | null;
-  last_quality: Confidence;
-  board_events: BoardEvent[];
-  eta_events: EtaEvent[];
-  actual_arrival: string | null;
-  note: string;
-}
-
 export type TripPhase = "ride" | "transfer" | "waiting" | "done";
 
 export interface LiveTripState {
@@ -237,7 +185,6 @@ export interface LiveTripState {
   platformStart: string | null;
   segments: RouteSegmentInput[];
   day: ServiceMode;
-  baseline: string | number | null;
   previousNextTrain: string | null;
   displaySegments: RouteSegment[];
   transferEndsAt: string | null;
