@@ -21,7 +21,8 @@ function intEnv(name: string, fallback: number, min: number, max: number): numbe
   return Number.isFinite(value) ? Math.max(min, Math.min(max, Math.trunc(value))) : fallback;
 }
 export const BUILD_CONCURRENCY = intEnv("TRANSIT_BUILD_CONCURRENCY", 32, 1, 128);
-export const BUILD_HTTP_TIMEOUT_MS = intEnv("TRANSIT_BUILD_HTTP_TIMEOUT_MS", 15000, 3000, 60000);
+export const BUILD_HTTP_TIMEOUT_MS = intEnv("TRANSIT_BUILD_HTTP_TIMEOUT_MS", 30000, 3000, 60000);
+export const KRIC_HTTP_CONCURRENCY = intEnv("TRANSIT_BUILD_KRIC_HTTP_CONCURRENCY", 24, 1, 64);
 export const ALLOW_PARTIAL = /^(1|true|yes)$/i.test(Bun.env.TRANSIT_BUILD_ALLOW_PARTIAL?.trim() || "");
 
 export interface SourceRow {
@@ -93,27 +94,98 @@ export async function mapConcurrent<T, R>(items: readonly T[], limit: number, wo
   return results;
 }
 
-function secureKey(): string { const key = Bun.env.KRIC_API_KEY?.trim() ?? ""; if (!key) throw new Error("live 데이터 빌드에는 KRIC_API_KEY 환경변수가 필요합니다."); return key; }
+export function normalizeKricServiceKey(value: string): string {
+  const key = value.trim();
+  if (!/%[0-9a-f]{2}/i.test(key)) return key;
+  try { return decodeURIComponent(key); } catch { return key; }
+}
+
+function secureKey(): string {
+  const key = Bun.env.KRIC_API_KEY?.trim() ?? "";
+  if (!key) throw new Error("live 데이터 빌드에는 KRIC_API_KEY 환경변수가 필요합니다.");
+  return normalizeKricServiceKey(key);
+}
+
+export function buildKricUrl(endpoint: string, params: Record<string, string>, serviceKey = secureKey()): URL {
+  const url = new URL(`${KRIC_BASE}/${endpoint.replace(/^\/+/, "")}`);
+  url.searchParams.set("serviceKey", normalizeKricServiceKey(serviceKey));
+  url.searchParams.set("format", "json");
+  const ordered = ["railOprIsttCd", "dayCd", "lnCd", "stinCd"] as const;
+  const seen = new Set<string>();
+  for (const name of ordered) {
+    const value = params[name];
+    if (value === undefined) continue;
+    url.searchParams.set(name, value);
+    seen.add(name);
+  }
+  for (const [name, value] of Object.entries(params)) {
+    if (!seen.has(name)) url.searchParams.set(name, value);
+  }
+  return url;
+}
+
+export function parseKricJsonText(text: string): unknown {
+  const normalized = text.replace(/^\uFEFF/u, "").trim();
+  if (!normalized) throw new SyntaxError("KRIC returned an empty response body");
+  return JSON.parse(normalized);
+}
+
 const KRIC_TIMETABLE_RETRIES = intEnv("TRANSIT_BUILD_KRIC_RETRIES", 10, 0, 10);
 function effectiveKricRetries(endpoint: string, requested: number): number {
   return /(?:subwayTimetableExp|subwayTimetable|stationTimetable)$/u.test(endpoint)
     ? Math.max(requested, KRIC_TIMETABLE_RETRIES)
     : requested;
 }
+
+let activeKricRequests = 0;
+const kricWaiters: Array<() => void> = [];
+async function acquireKricSlot(): Promise<void> {
+  if (activeKricRequests < KRIC_HTTP_CONCURRENCY) {
+    activeKricRequests += 1;
+    return;
+  }
+  await new Promise<void>((resolveWaiter) => kricWaiters.push(resolveWaiter));
+}
+function releaseKricSlot(): void {
+  const next = kricWaiters.shift();
+  if (next) {
+    next();
+    return;
+  }
+  activeKricRequests = Math.max(0, activeKricRequests - 1);
+}
+
+function safeSnippet(text: string): string {
+  return text.replace(/\s+/g, " ").trim().slice(0, 240).replace(/serviceKey=[^&\s]+/gi, "serviceKey=REDACTED");
+}
+function requestDescriptor(endpoint: string, params: Record<string, string>): string {
+  return `${endpoint} ${JSON.stringify(params)}`;
+}
+
 export async function kricJson(endpoint: string, params: Record<string, string>, retries = 2): Promise<unknown> {
-  const url = new URL(`${KRIC_BASE}/${endpoint}`); url.searchParams.set("serviceKey", secureKey()); url.searchParams.set("format", "json"); for (const [name, value] of Object.entries(params)) url.searchParams.set(name, value);
+  const url = buildKricUrl(endpoint, params);
   const attempts = effectiveKricRetries(endpoint, retries);
   let error = "";
   for (let attempt = 0; attempt <= attempts; attempt += 1) {
-    const controller = new AbortController(); const timer = setTimeout(() => controller.abort(), BUILD_HTTP_TIMEOUT_MS);
+    await acquireKricSlot();
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), BUILD_HTTP_TIMEOUT_MS);
     try {
-      const response = await fetch(url, { signal: controller.signal, headers: { Accept: "application/json", "User-Agent": "JigeumTa-SQLite-Builder/1.0" } });
-      const text = await response.text(); if (!response.ok) throw new Error(`HTTP ${response.status}`); return JSON.parse(text);
+      const response = await fetch(url, {
+        signal: controller.signal,
+        headers: { Accept: "application/json" },
+      });
+      const text = await response.text();
+      if (!response.ok) throw new Error(`HTTP ${response.status}: ${safeSnippet(text)}`);
+      return parseKricJsonText(text);
     } catch (cause) {
       error = cause instanceof Error ? `${cause.name}: ${cause.message}` : String(cause);
-    } finally { clearTimeout(timer); }
+    } finally {
+      clearTimeout(timer);
+      releaseKricSlot();
+    }
   }
-  throw new Error(`${endpoint} 호출 실패: ${error}`);
+  throw new Error(`${requestDescriptor(endpoint, params)} 호출 실패: ${error}`);
 }
 export function metadata(db: Database, key: string, value: string | number | boolean): void { db.query(`INSERT OR REPLACE INTO metadata(key,value) VALUES (?,?)`).run(key, String(value)); }
 export function buildSource(db: Database, name: string, uri: string, rows: number, note = ""): void { db.query(`INSERT OR REPLACE INTO build_source(source_name,source_uri,fetched_at,row_count,note) VALUES (?,?,?,?,?)`).run(name, uri, new Date().toISOString(), rows, note); }
